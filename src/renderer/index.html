@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Server Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><div class="brand-mark" data-icon="layers"></div><div><strong>Server Explorer</strong><span>让本地与服务器的文件，轻松流动</span></div></div>
+    <div class="header-actions"><span id="mode-badge" class="mode-badge" hidden>演示数据 · 未连接服务器</span><button id="demo-button" class="button subtle">体验演示</button><span class="header-divider"></span><span class="secure-label"><i data-icon="shield"></i> SSH 安全连接</span></div>
+  </header>
+  <div class="app-body">
+    <aside class="sidebar">
+      <button id="open-local" class="button local-button"><i data-icon="computer"></i> 本地电脑 <span>打开文件面板</span></button>
+      <div class="sidebar-title"><h2>服务器</h2><span id="server-count" class="count">0</span><button id="refresh-config" class="icon-button" title="重新读取 SSH 配置" aria-label="刷新服务器"><i data-icon="refresh"></i></button></div>
+      <label class="search-box"><i data-icon="search"></i><input id="server-search" placeholder="搜索名称、地址…" aria-label="搜索服务器"><kbd>⌕</kbd></label>
+      <div class="list-heading">SSH CONFIG <span>点击打开面板</span></div>
+      <div id="server-list" class="server-list"></div>
+      <div class="sidebar-bottom"><div class="config-caption"><span class="status-dot"></span> 自动读取本机配置</div><div id="config-path" class="config-path" title=""></div><button id="choose-config" class="button config-button"><i data-icon="folder"></i> 选择配置文件</button></div>
+    </aside>
+    <main class="main">
+      <section class="workspace">
+        <div class="workspace-heading"><div><div class="eyebrow">YOUR WORKSPACE</div><h1>文件工作区 <span id="panel-count"></span></h1></div><div class="workspace-hint"><i data-icon="move"></i> 拖拽文件到另一面板即可复制</div></div>
+        <div id="config-warning" class="notice" hidden></div>
+        <div id="panels" class="panels"></div>
+        <div id="empty-workspace" class="empty-workspace"><div class="empty-content"><div class="empty-illustration"><div class="server-drawing" data-icon="server"></div><div class="connection-line"></div><div class="folder-drawing" data-icon="folder"></div></div><h2>你的服务器，一个工作区</h2><p>从左侧打开本地电脑或服务器面板，<br>将文件拖到目标面板或文件夹，开始复制。</p><div class="steps"><div><b>01</b><span>自动读取 SSH 配置</span></div><div><b>02</b><span>并排浏览多个服务器</span></div><div><b>03</b><span>拖拽复制文件与文件夹</span></div></div><button id="empty-demo" class="button primary">体验多服务器工作区 <i data-icon="arrow-right"></i></button><span class="empty-footnote">支持密钥、密码、ssh-agent 与跳板机</span></div></div>
+        <div class="workspace-footer"><span><span class="status-dot"></span><span id="connection-summary">还没有打开的连接</span></span><span>Ctrl / Shift 多选 · 双击进入文件夹</span></div>
+      </section>
+      <section class="transfer-section" id="transfer-section"><button id="transfer-toggle" class="transfer-heading"><span><i data-icon="transfer"></i> 传输中心 <b id="active-transfer-count">0</b></span><span id="transfer-summary">所有传输都在这里 <i data-icon="chevron-down"></i></span></button><div id="transfer-list" class="transfer-list"><div class="transfer-empty"><i data-icon="transfer"></i><span>还没有传输任务</span><span>文件复制后，进度会显示在这里</span></div></div></section>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <dialog id="modal"><form id="modal-form"><div class="modal-icon" id="modal-icon"></div><h2 id="modal-title"></h2><p id="modal-message"></p><div id="modal-detail" class="modal-detail"></div><div id="modal-fields"></div><div id="modal-actions" class="modal-actions"></div></form></dialog>
+</body>
+</html>

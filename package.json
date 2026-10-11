@@ -1,0 +1,64 @@
+{
+  "name": "server-explorer",
+  "version": "1.0.6",
+  "description": "SSH 多服务器文件管理与跨服务器拖拽复制",
+  "main": "src/main.js",
+  "author": "Server Explorer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qusica/server-explorer.git"
+  },
+  "homepage": "https://github.com/qusica/server-explorer#readme",
+  "bugs": {
+    "url": "https://github.com/qusica/server-explorer/issues"
+  },
+  "scripts": {
+    "start": "node scripts/build-askpass.js && electron .",
+    "test": "node --test test/config.test.js test/local.test.js test/integration.test.js test/remote-copy.test.js test/trusted-page.test.js",
+    "check": "node scripts/check.js",
+    "test:ui": "node scripts/test-ui.js && node scripts/test-files-ui.js",
+    "build": "node scripts/build-askpass.js && electron-builder --win portable --x64",
+    "pack": "node scripts/build-askpass.js && electron-builder --win --dir --x64"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "glob": "^10.5.0"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
+    "ssh2": "1.17.0",
+    "@playwright/test": "^1.56.0"
+  },
+  "build": {
+    "appId": "dev.server-explorer.desktop",
+    "productName": "Server Explorer",
+    "directories": {
+      "output": "dist"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "src/**/*",
+      "resources/app.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/askpass.exe",
+        "to": "askpass.exe"
+      }
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "resources/app.ico",
+      "signExecutable": false
+    },
+    "portable": {
+      "artifactName": "Server-Explorer-${version}-Windows.exe"
+    },
+    "npmRebuild": false
+  }
+}

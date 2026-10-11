@@ -1,0 +1,142 @@
+const { _electron: electron } = require('@playwright/test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+async function run() {
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(),'explorer-ui-local-'));
+  await fs.mkdir(path.join(localRoot,'待删除','子目录'),{recursive:true});
+  await fs.writeFile(path.join(localRoot,'待删除','子目录','文件.txt'),'test');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await electron.launch({ args:[path.resolve(__dirname,'..'),'--user-data-dir='+path.join(localRoot,'profile')], env });
+  const errors = [];
+  try {
+    const page = await app.firstWindow();
+    page.on('pageerror',error => errors.push(error.message));
+    await page.waitForSelector('.server-card');
+    assert.equal(await page.title(),'Server Explorer');
+    assert.ok(await page.locator('.server-card').count() > 0,'automatically lists SSH aliases');
+    // Hidden flex panels used to retain half the empty workspace's height.
+    // Verify real window sizes and that overflow can be scrolled from its top.
+    for (const [width,height] of [[1480,940],[1180,780],[1000,680]]) {
+      await app.evaluate(({BrowserWindow},{width,height})=>BrowserWindow.getAllWindows()[0].setSize(width,height),{width,height});
+      await page.waitForTimeout(150);
+      const layout = await page.evaluate(()=>{
+        const empty=document.querySelector('#empty-workspace'); empty.scrollTop=0;
+        const bounds=empty.getBoundingClientRect(), illustration=empty.querySelector('.empty-illustration').getBoundingClientRect();
+        return {hiddenPanelsHeight:document.querySelector('#panels').getBoundingClientRect().height,top:bounds.top,illustrationTop:illustration.top,illustrationHeight:illustration.height};
+      });
+      assert.equal(layout.hiddenPanelsHeight,0,'hidden panels occupy no height');
+      assert.ok(layout.illustrationTop>=layout.top,`${width}x${height}: illustration is not clipped at top`);
+      assert.ok(layout.illustrationHeight>=70,'illustration does not shrink');
+      await page.locator('.empty-footnote').scrollIntoViewIfNeeded();
+      const end = await page.evaluate(()=>{
+        const empty=document.querySelector('#empty-workspace').getBoundingClientRect();
+        const foot=document.querySelector('.empty-footnote').getBoundingClientRect();
+        const button=document.querySelector('#empty-demo').getBoundingClientRect();
+        return {bottom:empty.bottom,footBottom:foot.bottom,buttonTop:button.top,top:empty.top};
+      });
+      assert.ok(end.footBottom<=end.bottom+1 && end.buttonTop>=end.top,'button and footnote remain accessible');
+    }
+    await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1480,940));
+    await page.waitForTimeout(150);
+    await page.evaluate(()=>document.querySelector('#empty-workspace').scrollTop=0);
+    await fs.mkdir('test-output',{recursive:true});
+    await page.locator('.workspace').screenshot({path:path.resolve('test-output','empty-workspace.png')});
+    await app.evaluate(({dialog},localRoot)=>{ dialog.showOpenDialog=async()=>({canceled:false,filePaths:[localRoot]}); },localRoot);
+    await page.locator('#open-local').click();
+    await page.locator('.panel .choose-directory').click();
+    await page.locator('.file-row[data-name="待删除"]').waitFor();
+    assert.equal(await page.locator('.connected-pill').innerText(),'本地');
+    await page.locator('.file-row[data-name="待删除"]').click();
+    await page.locator('.delete-selected').click();
+    await page.locator('#modal').waitFor({state:'visible'});
+    assert.match(await page.locator('#modal-detail').innerText(),/待删除/);
+    assert.match(await page.locator('#modal-message').innerText(),/无法撤销/);
+    await page.locator('#modal-actions .button').first().click();
+    await page.locator('.file-row[data-name="待删除"]').waitFor();
+    assert.equal(await fs.readFile(path.join(localRoot,'待删除','子目录','文件.txt'),'utf8'),'test');
+    await page.locator('.file-row[data-name="待删除"]').click();
+    await page.locator('.file-list').press('Delete');
+    await page.locator('#modal').waitFor({state:'visible'});
+    await page.locator('#modal-actions .danger').click();
+    await page.locator('.file-row[data-name="待删除"]').waitFor({state:'detached'});
+    assert.deepEqual((await fs.readdir(localRoot)).filter(name=>name !== 'profile'),[]);
+    await page.locator('.close-panel').click();
+    await page.locator('#demo-button').click();
+    await page.waitForSelector('.panel:nth-child(3) .file-row');
+    assert.equal(await page.locator('.panel').count(),3);
+    assert.ok(await page.locator('#mode-badge').isVisible(),'demonstration is clearly labelled');
+    const source = page.locator('.panel').nth(0), target = page.locator('.panel').nth(2);
+    await source.locator('.file-row[data-name="deploy.sh"]').click();
+    assert.equal(await source.locator('.selected').count(),1);
+    await source.locator('.file-row[data-name="deploy.sh"]').dragTo(source.locator('.file-row[data-name="README.md"]'));
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator('#modal').isVisible(),false,'dropping into original directory shows no copy prompt');
+    assert.equal(await page.locator('.transfer-row').count(),0,'same-directory drop creates no task');
+    await source.locator('.file-row[data-name="deploy.sh"]').dragTo(target.locator('.file-row[data-name="manifest.json"]'));
+    await page.locator('#modal').waitFor({state:'visible'});
+    assert.match(await page.locator('#modal-title').innerText(),/模拟复制/);
+    assert.match(await page.locator('#modal-detail').innerText(),/目标目录：\/home\/deploy\n/);
+    await page.locator('#modal-actions .primary').click();
+    await page.waitForSelector('.transfer-row.done');
+    await target.locator('.file-row[data-name="deploy.sh"]').waitFor();
+    await source.locator('.file-row[data-name="deploy.sh"]').dragTo(target.locator('.file-row[data-name="archives"]'));
+    await page.locator('#modal').waitFor({state:'visible'});
+    assert.match(await page.locator('#modal-detail').innerText(),/目标目录：\/home\/deploy\/archives\n/);
+    await page.locator('#modal-actions .button').first().click();
+    await target.locator('.file-row[data-name="daily"]').dblclick();
+    await page.waitForFunction(() => document.querySelectorAll('.path-input')[2].value.endsWith('/daily'));
+    await target.locator('.create-folder').click();
+    await page.locator('#modal-fields input[name="name"]').fill('测试文件夹');
+    await page.locator('#modal-actions .primary').click();
+    await target.locator('.file-row[data-name="测试文件夹"]').waitFor();
+    await target.locator('.go-home').click();
+    await source.locator('.file-row[data-name="apps"]').dblclick();
+    await source.locator('.file-row[data-name="package.json"]').waitFor();
+    await source.locator('.go-home').click();
+    await source.locator('.file-row[data-name="assets"]').waitFor();
+    await source.locator('.file-row[data-name="assets"]').click();
+    await fs.mkdir('test-output',{recursive:true});
+    await page.screenshot({path:path.resolve('test-output','workspace.png')});
+    await source.locator('.file-row[data-name="deploy.sh"]').click();
+    await source.locator('.delete-selected').click();
+    await page.locator('#modal').waitFor({state:'visible'});
+    assert.match(await page.locator('#modal-title').innerText(),/模拟删除/);
+    await page.locator('#modal-actions .primary').click();
+    await source.locator('.file-row[data-name="deploy.sh"]').waitFor({state:'detached'});
+    await page.locator('#open-local').click();
+    const local = page.locator('.panel').nth(3);
+    await local.locator('.file-row').first().waitFor();
+    assert.equal(await local.locator('.upload-files').count(),0);
+    await local.locator('.close-panel').click();
+    await source.locator('.file-row[data-name="README.md"]').click();
+    await source.locator('.download-selected').click();
+    await page.locator('#modal').waitFor({state:'visible'});
+    assert.match(await page.locator('#modal-detail').innerText(),/production.*本地电脑/);
+    await page.locator('#modal-actions .button').first().click();
+    await page.locator('.panel').nth(3).locator('.close-panel').click();
+    assert.deepEqual(errors,[],'renderer has no uncaught errors');
+    // Check failure stays visible rather than leaving a stale loading label.
+    await page.locator('#demo-button').click();
+    await page.locator('#modal-actions .primary').click();
+    await app.evaluate(({ipcMain})=>{
+      ipcMain.removeHandler('config:load');
+      ipcMain.handle('config:load',()=>({ok:false,error:'测试：配置文件无法读取'}));
+    });
+    await page.locator('#refresh-config').click();
+    await page.waitForFunction(()=>document.querySelector('#config-warning').textContent.includes('测试：配置文件无法读取'));
+    assert.ok(await page.locator('#config-warning').isVisible());
+    assert.doesNotMatch(await page.locator('#config-path').textContent(),/正在读取/);
+    console.log('UI passed: local browsing, confirmed and cancelled recursive deletion, Delete shortcut, simulated local downloads, remote drag-and-drop, progress, navigation and folder creation.');
+  } catch (error) {
+    const page = await app.firstWindow();
+    await fs.mkdir('test-output',{recursive:true});
+    await page.screenshot({path:path.resolve('test-output','failure.png')});
+    console.log(await page.locator('#modal-detail').textContent());
+    console.log(await page.locator('.transfer-route').allTextContents());
+    console.log(await page.locator('.path-input').evaluateAll(inputs => inputs.map(i => i.value)));
+    throw error;
+  } finally { await app.close(); await fs.rm(localRoot,{recursive:true,force:true}); }
+}
+run().catch(error => { console.error(error); process.exitCode=1; });

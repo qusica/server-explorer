@@ -1,0 +1,7 @@
+node_modules/
+dist/
+resources/askpass.exe
+test-output/
+*.log
+.env
+.env.*

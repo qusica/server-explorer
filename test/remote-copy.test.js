@@ -1,0 +1,45 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+const {spawn} = require('node:child_process');
+const {Sftp} = require('../src/backend/sftp');
+test('remote cp fallback: real shell quoting, readonly files and cancellation cleanup', async t => {
+  const shell = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : '/bin/sh';
+  if (!await fs.access(shell).then(()=>true,()=>false)) { t.skip('local POSIX shell unavailable'); return; }
+  const root = await fs.mkdtemp(path.join(os.tmpdir(),'explorer-remote-cp-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const source = path.join(root,"中文 ' $(echo ignored); file.txt").replaceAll('\\','/');
+  const destination = path.join(root,'destination.part').replaceAll('\\','/');
+  await fs.writeFile(source,'server only contents');
+  const handles = new Set(); let slow = false;
+  const endpoint = Object.create(Sftp.prototype);
+  endpoint.extensions = new Map();
+  endpoint.open = async (p,flags,mode) => { const h=await fs.open(p,flags & 2 ? 'wx' : 'r',mode); handles.add(h); return h; };
+  endpoint.write = (h,offset,data)=>h.write(data,0,data.length,offset);
+  endpoint.closeHandle = async h=>{handles.delete(h); await h.close();};
+  endpoint.remove = p=>fs.unlink(p);
+  endpoint.stat = async p=>{const attrs=await fs.lstat(p);return {type:attrs.isFile() ? 'file' : 'other',size:attrs.size};};
+  endpoint.request = async (type,p,flags,mode)=>{assert.equal(type,9);await fs.chmod(p.subarray(4).toString(),mode.readUInt32BE());};
+  let started;
+  endpoint.executeCopy = (command,signal,cancelRemote)=>new Promise((resolve,reject)=>{
+    const child=spawn(shell,['-c',(slow ? 'cp() { sleep 0.5; command cp "$@"; }; ' : '')+command],{windowsHide:true,stdio:['ignore','ignore','pipe']});
+    let stderr='';child.stderr.on('data',data=>{stderr+=data;});
+    const abort=()=>{cancelRemote().catch(reject);};
+    signal.addEventListener('abort',abort,{once:true});
+    child.once('error',reject);
+    child.once('close',code=>{signal.removeEventListener('abort',abort);if (signal.aborted) reject(new Error('cancelled'));else if(code) reject(new Error(stderr || 'cp failed '+code));else resolve();});
+    started?.();
+  });
+  let copied=0;
+  await endpoint.copyFile(source,destination,0o444,20,new AbortController().signal,length=>{copied+=length;});
+  assert.equal(copied,20);assert.equal(await fs.readFile(destination,'utf8'),'server only contents');assert.equal(handles.size,0);
+  assert.deepEqual((await fs.readdir(root)).sort(),[path.basename(destination),path.basename(source)].sort(),'control file is removed');
+  await fs.chmod(destination,0o600);await fs.unlink(destination);
+  slow=true;const controller=new AbortController();
+  started=()=>setTimeout(()=>controller.abort(),150);
+  await assert.rejects(endpoint.copyFile(source,destination,0o644,20,controller.signal,()=>{}),/cancelled/);
+  assert.deepEqual(await fs.readdir(root),[path.basename(source)],'remote shell stops its copy and removes temporary output');
+  assert.equal(await fs.readFile(source,'utf8'),'server only contents');assert.equal(handles.size,0);
+});

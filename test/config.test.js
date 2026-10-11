@@ -1,0 +1,23 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const { discover, tokens } = require('../src/backend/config');
+test('parses quoted Include paths, aliases, defaults, wildcards and cycles with OpenSSH',async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(),'explorer-config-')); t.after(() => fs.rm(root,{recursive:true,force:true}));
+  if (process.platform === 'win32') execFileSync('icacls',[root,'/inheritance:r','/grant:r',`${os.userInfo().username}:(OI)(CI)F`],{windowsHide:true,stdio:'pipe'});
+  const included = path.join(root,'extra config'), config = path.join(root,'config');
+  await fs.writeFile(included,'Host included\n  HostName 127.0.0.2\n  User example\n');
+  await fs.writeFile(config,`Include "${included.replaceAll('\\','/')}"\nHost alpha beta\n  HostName 127.0.0.1\n  Port 2200\nHost *\n  User defaults\nHost *.wild !excluded\n  Port 2222\n`);
+  const result = await discover(config);
+  assert.deepEqual(result.servers.map(s => s.alias),['included','alpha','beta']);
+  assert.equal(result.servers.find(s => s.alias === 'alpha').error,null);
+  assert.equal(result.servers.find(s => s.alias === 'alpha').user,'defaults');
+  assert.equal(result.servers.find(s => s.alias === 'alpha').port,2200);
+  assert.equal(result.servers[0].hostname,'127.0.0.2');
+  assert.equal(result.servers[0].error,null);
+});
+test('missing config produces an actionable empty state',async() => { const result = await discover(path.join(os.tmpdir(),'nonexistent-explorer-config-987654')); assert.equal(result.servers.length,0); assert.match(result.warnings[0],/没有找到/); });
+test('quoted hash stays literal and comments are excluded',() => { assert.deepEqual(tokens('Include "with spaces/#file" # comment'),['Include','with spaces/#file']); });

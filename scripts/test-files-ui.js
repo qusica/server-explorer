@@ -1,0 +1,168 @@
+const { _electron: electron } = require('@playwright/test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { testServer } = require('../test/helpers');
+async function run() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'explorer-files-ui-')));
+  const remote = path.join(root,'remote'), local = path.join(root,'local'), downloads = path.join(root,'downloads');
+  await fs.mkdir(remote); await fs.mkdir(path.join(local,'上传目录','子目录'),{recursive:true}); await fs.mkdir(downloads);
+  await fs.writeFile(path.join(local,'中文.txt'),'test file contents'); await fs.writeFile(path.join(local,'拖入.txt'),'dropped contents');
+  await fs.writeFile(path.join(local,'上传目录','子目录','zero.txt'),'');
+  const server = await testServer({tester:remote});
+  const configPath = path.join(root,'config');
+  await fs.writeFile(configPath,`Host file-test\n HostName 127.0.0.1\n User tester\n Port ${server.port}\n PreferredAuthentications password\n UserKnownHostsFile "${path.join(root,'known_hosts').replaceAll('\\','/')}"\n`);
+  const env = {...process.env}; delete env.ELECTRON_RUN_AS_NODE;
+  let app, preferencesPath, previousPreferences;
+  try {
+    app = await electron.launch({args:[path.resolve(__dirname,'..'),'--user-data-dir='+path.join(root,'profile')],env});
+    const page = await app.firstWindow(), errors = [];
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.waitForSelector('#choose-config');
+    await page.waitForFunction(()=>!configLoading);
+    preferencesPath = await app.evaluate(({app})=>app.getPath('userData') + '/preferences.json');
+    assert.equal(path.dirname(preferencesPath),path.join(root,'profile'),'tests use an isolated profile');
+    try { previousPreferences = await fs.readFile(preferencesPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    async function chooser(files) {
+      await app.evaluate(({dialog},files)=>{ dialog.showOpenDialog=async(_,options)=>{globalThis.lastPickerOptions=options; return {canceled:false,filePaths:files};}; },files);
+    }
+    await chooser([configPath]); await page.locator('#choose-config').click();
+    await page.locator('.server-card[data-alias="file-test"]').click();
+    await page.waitForFunction(()=>document.querySelector('#modal-title').textContent==='确认服务器身份');
+    await page.locator('#modal-actions .primary').click();
+    await page.waitForFunction(()=>document.querySelector('#modal-title').textContent==='SSH 身份验证');
+    await page.locator('#modal-fields input').fill('test-password'); await page.locator('#modal-actions .primary').click();
+    const panel = page.locator('.panel').first(); await panel.locator('.upload-files').waitFor();
+    const downloadButton = panel.getByRole('button',{name:'下载到本地',exact:true});
+    assert.ok(await downloadButton.isVisible(),'download has a visible text label');
+    assert.ok(await downloadButton.isEnabled(),'download remains discoverable without a selection');
+    await downloadButton.click();
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('请先在服务器面板中选中'));
+    assert.equal(await page.locator('#modal').isVisible(),false,'empty selection shows guidance rather than doing nothing');
+    let completed = 0;
+    async function finishCopy() {
+      await page.locator('#modal').waitFor({state:'visible'}); await page.locator('#modal-actions .primary').click();
+      completed++; await page.waitForFunction(count=>document.querySelectorAll('.transfer-row.done').length===count,completed);
+    }
+    await chooser([path.join(local,'中文.txt')]);
+    await panel.locator('.upload-files').click(); await page.locator('#modal-actions .primary').click(); await finishCopy();
+    assert.deepEqual(await app.evaluate(()=>globalThis.lastPickerOptions.properties),['openFile','multiSelections']);
+    assert.equal(await fs.readFile(path.join(remote,'中文.txt'),'utf8'),'test file contents');
+    await chooser([path.join(local,'上传目录')]);
+    await panel.locator('.upload-files').click(); await page.getByRole('button',{name:'选择文件夹',exact:true}).click(); await finishCopy();
+    assert.deepEqual(await app.evaluate(()=>globalThis.lastPickerOptions.properties),['openDirectory','multiSelections']);
+    assert.equal((await fs.stat(path.join(remote,'上传目录','子目录','zero.txt'))).size,0);
+    await panel.locator('.file-row[data-name="中文.txt"]').dragTo(panel.locator('.file-row[data-name="上传目录"] .file-name'));
+    await page.locator('#modal').waitFor({state:'visible'});
+    assert.match(await page.locator('#modal-message').innerText(),/在服务器端/);
+    const readsBefore=server.counters.reads, writesBefore=server.counters.writes;
+    await finishCopy(); assert.equal(await fs.readFile(path.join(remote,'上传目录','中文.txt'),'utf8'),'test file contents');
+    assert.equal(server.counters.reads,readsBefore); assert.equal(server.counters.writes,writesBefore);
+    assert.match(await page.locator('.transfer-row.done').first().innerText(),/服务器端复制/);
+    await panel.locator('.file-row[data-name="中文.txt"]').dragTo(panel.locator('.file-row[data-name="中文.txt"] .file-date'));
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator('#modal').isVisible(),false,'real same-directory drop does not show a modal');
+    assert.equal(await page.locator('.transfer-row.done').count(),completed);
+    await panel.locator('.file-row[data-name="中文.txt"]').click();
+    await panel.locator('.copy-selected').click();
+    await page.locator('#modal').waitFor({state:'visible'});
+    assert.equal(await page.locator('#modal-fields select[name="target"] option').count(),1,'one server panel can copy to another directory on itself');
+    await page.locator('#modal-fields input[name="path"]').fill('/');
+    await page.locator('#modal-actions .primary').click();
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator('#modal').isVisible(),false,'choosing original directory closes without a copy confirmation');
+    assert.equal(await page.locator('.transfer-row.done').count(),completed);
+    // A real Chromium File supplies the native path through the isolated preload.
+    await page.evaluate(()=>{const input=document.createElement('input'); input.type='file'; input.id='test-file-input'; document.body.appendChild(input);});
+    await page.locator('#test-file-input').setInputFiles(path.join(local,'拖入.txt'));
+    assert.equal(await page.evaluate(()=>window.explorer.filePath(document.querySelector('#test-file-input').files[0])),path.join(local,'拖入.txt').replaceAll('\\','/'));
+    await page.evaluate(()=>{const data=new DataTransfer(); data.items.add(document.querySelector('#test-file-input').files[0]); document.querySelector('.panel .file-list').dispatchEvent(new DragEvent('drop',{dataTransfer:data,bubbles:true,cancelable:true}));});
+    await finishCopy(); assert.equal(await fs.readFile(path.join(remote,'拖入.txt'),'utf8'),'dropped contents');
+    await panel.locator('.file-row[data-name="中文.txt"]').click(); await chooser([downloads]);
+    await downloadButton.click(); await finishCopy();
+    assert.equal(await fs.readFile(path.join(downloads,'中文.txt'),'utf8'),'test file contents','single-file download writes the actual content');
+    const downloadPicker = await app.evaluate(()=>globalThis.lastPickerOptions);
+    assert.equal(downloadPicker.title,'选择下载保存目录'); assert.equal(downloadPicker.buttonLabel,'下载到此文件夹');
+    await panel.locator('.file-row[data-name="上传目录"]').click(); await chooser([downloads]);
+    await panel.locator('.download-selected').click(); await finishCopy();
+    assert.deepEqual(await app.evaluate(()=>globalThis.lastPickerOptions.properties),['openDirectory']);
+    assert.equal((await fs.stat(path.join(downloads,'上传目录','子目录','zero.txt'))).size,0);
+    await panel.locator('.file-row[data-name="上传目录"]').click(); await panel.locator('.delete-selected').click();
+    await page.locator('#modal').waitFor({state:'visible'});
+    const blocked = await page.evaluate(async localFile=>{
+      try { await window.explorer.transfer({sourceId:'local',targetId:panels[0].id,paths:[localFile],targetPath:'/'}); return ''; } catch(error) { return error.message; }
+    },path.join(local,'中文.txt'));
+    assert.match(blocked,/正在删除/);
+    await page.locator('#modal-actions .button').first().click();
+    await panel.locator('.file-row[data-name="上传目录"]').waitFor();
+    assert.equal((await fs.stat(path.join(remote,'上传目录','子目录','zero.txt'))).size,0);
+    await panel.locator('.file-row[data-name="上传目录"]').click(); await panel.locator('.delete-selected').click();
+    await page.locator('#modal').waitFor({state:'visible'}); await page.locator('#modal-actions .danger').click();
+    await panel.locator('.file-row[data-name="上传目录"]').waitFor({state:'detached'});
+    await assert.rejects(fs.stat(path.join(remote,'上传目录')),error=>error.code==='ENOENT');
+    await page.locator('#open-local').click(); const localPanel = page.locator('.panel').nth(1);
+    await chooser([downloads]); await localPanel.locator('.choose-directory').click();
+    await localPanel.locator('.file-row[data-name="上传目录"]').click(); await localPanel.locator('.file-list').press('Delete');
+    await page.locator('#modal').waitFor({state:'visible'}); await page.locator('#modal-actions .danger').click();
+    await localPanel.locator('.file-row[data-name="上传目录"]').waitFor({state:'detached'}); assert.deepEqual(await fs.readdir(downloads),['中文.txt']);
+    assert.equal(await fs.readFile(path.join(local,'中文.txt'),'utf8'),'test file contents','uploads preserve originals');
+    await chooser([local]); await localPanel.locator('.choose-directory').click();
+    await app.evaluate(({Menu,BrowserWindow})=>{
+      Menu.buildFromTemplate=template=>{globalThis.fileMenuTemplate=template;return {popup:()=>{}};};
+      BrowserWindow.getAllWindows()[0].webContents.startDrag=item=>{globalThis.nativeDrag=item;};
+    });
+    await localPanel.locator('.file-row[data-name="中文.txt"]').click({button:'right'});
+    const localMenu=await app.evaluate(()=>globalThis.fileMenuTemplate.map(item=>({label:item.label,enabled:item.enabled,submenu:item.submenu?.map(child=>child.label)})));
+    assert.deepEqual(localMenu.find(item=>item.label==='上传到').submenu,['file-test'],'upload menu shows connected server panels');
+    await app.evaluate(()=>globalThis.fileMenuTemplate.find(item=>item.label==='上传到').submenu[0].click());
+    await page.locator('#modal').waitFor({state:'visible'});
+    assert.match(await page.locator('#modal-detail').innerText(),/本地电脑.*file-test/);
+    await page.locator('#modal-actions .button').first().click();
+    await panel.locator('.file-row[data-name="中文.txt"]').click({button:'right'});
+    await app.evaluate(()=>globalThis.fileMenuTemplate.find(item=>item.label==='重命名').click());
+    await page.locator('#modal-fields input[name="name"]').fill('重命名.txt'); await page.locator('#modal-actions .primary').click();
+    await panel.locator('.file-row[data-name="重命名.txt"]').waitFor();
+    assert.equal(await fs.readFile(path.join(remote,'重命名.txt'),'utf8'),'test file contents');
+    await localPanel.locator('.file-row[data-name="中文.txt"]').click({button:'right'});
+    await app.evaluate(()=>globalThis.fileMenuTemplate.find(item=>item.label==='重命名').click());
+    await page.locator('#modal-fields input[name="name"]').fill('本地重命名.txt'); await page.locator('#modal-actions .primary').click();
+    await localPanel.locator('.file-row[data-name="本地重命名.txt"]').waitFor();
+    assert.equal(await fs.readFile(path.join(local,'本地重命名.txt'),'utf8'),'test file contents');
+    await localPanel.locator('.file-row[data-name="本地重命名.txt"]').click();
+    await localPanel.locator('.file-row[data-name="本地重命名.txt"]').dispatchEvent('dragstart');
+    await page.waitForFunction(()=>window.explorer && document.querySelector('#modal').open===false);
+    for (let attempt=0; attempt<40 && !await app.evaluate(()=>!!globalThis.nativeDrag); attempt++) await page.waitForTimeout(25);
+    await app.evaluate(()=>{if (!globalThis.nativeDrag) throw new Error('Native drag was not invoked');});
+    const nativeLocal = await app.evaluate(()=>globalThis.nativeDrag.files);
+    assert.deepEqual(nativeLocal,[path.join(local,'本地重命名.txt')]);
+    await panel.locator('.file-row[data-name="重命名.txt"]').click({button:'right'});
+    await chooser([downloads]); await app.evaluate(()=>globalThis.fileMenuTemplate.find(item=>item.label==='下载到本地').click());
+    await finishCopy(); assert.equal(await fs.readFile(path.join(downloads,'重命名.txt'),'utf8'),'test file contents');
+    await panel.locator('.file-row[data-name="重命名.txt"]').click({button:'right'});
+    await app.evaluate(()=>globalThis.fileMenuTemplate.find(item=>item.label==='拖到桌面 / 文件夹').click());
+    await page.locator('.native-drag-card').waitFor(); completed++;
+    assert.match(await page.locator('#modal-message').innerText(),/Windows 桌面/);
+    await page.locator('.native-drag-card').dispatchEvent('dragstart');
+    for (let attempt=0; attempt<40 && !await app.evaluate(()=>globalThis.nativeDrag.files[0].includes('desktop-files')); attempt++) await page.waitForTimeout(25);
+    const nativeRemote=await app.evaluate(()=>globalThis.nativeDrag.files);
+    assert.equal(await fs.readFile(nativeRemote[0],'utf8'),'test file contents');
+    assert.ok(nativeRemote[0].includes('desktop-files'),'remote drag uses prepared local files');
+    await page.locator('#modal-actions .button').click();
+    await panel.locator('.file-row[data-name="拖入.txt"]').click({button:'right'});
+    await app.evaluate(()=>globalThis.fileMenuTemplate.find(item=>item.label==='删除').click());
+    await page.locator('#modal-actions .danger').click();
+    await panel.locator('.file-row[data-name="拖入.txt"]').waitFor({state:'detached'});
+    await assert.rejects(fs.stat(path.join(remote,'拖入.txt')),error=>error.code==='ENOENT');
+    assert.deepEqual(errors,[]);
+    console.log('Real file UI passed: file/folder upload, downloads, context-menu upload/download/delete/rename, native local file handoff, prepared remote desktop files, and transfer/delete exclusion.');
+  } catch (error) {
+    if (app) { const page = await app.firstWindow(); console.log(await page.evaluate(()=>({title:document.querySelector('#modal-title').textContent,toast:document.querySelector('#toast').textContent,jobs:[...jobs.values()],panels:panels.map(p=>({id:p.id,status:p.status,path:p.path,error:p.error}))}))); await page.screenshot({path:path.resolve('test-output','files-ui-failure.png')}); }
+    throw error;
+  } finally {
+    if (app) await app.close(); await server.close();
+    if (preferencesPath) { if (previousPreferences) await fs.writeFile(preferencesPath,previousPreferences); else await fs.rm(preferencesPath,{force:true}); }
+    await fs.rm(root,{recursive:true,force:true});
+  }
+}
+run().catch(error=>{console.error(error);process.exitCode=1;});

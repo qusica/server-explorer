@@ -1,0 +1,114 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: Existing version tag to build and validate
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: Application version
+        value: ${{ jobs.build.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release-tag && format('refs/tags/{0}', inputs.release-tag) || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Validate version
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $lockVersion = (Get-Content -Raw package-lock.json | ConvertFrom-Json).version
+          if ($version -ne $lockVersion) { throw 'package.json and package-lock.json versions differ' }
+          if ($env:RELEASE_TAG -and ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$' -or $env:RELEASE_TAG -cne "v$version")) {
+            throw "Release tag must equal v$version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare authentication helper and demo SSH config
+        run: |
+          ssh -V
+          node scripts/build-askpass.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # UI tests discover this alias; they never connect to it.
+          $sshDirectory = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.ssh'
+          New-Item -ItemType Directory -Path $sshDirectory -Force | Out-Null
+          "Host ci-demo`n    HostName 127.0.0.1`n    User runner`n" | Set-Content -LiteralPath (Join-Path $sshDirectory 'config') -Encoding utf8
+
+      - name: Check JavaScript syntax
+        run: npm run check
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Run desktop UI tests
+        run: npm run test:ui
+
+      - name: Build Windows portable executable
+        run: npm run build -- --publish never
+
+      - name: Test packaged application
+        run: node scripts/smoke-package.js
+
+      - name: Test portable launcher
+        run: node scripts/test-portable-launcher.js
+
+      - name: Calculate SHA-256
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $filename = "Server-Explorer-$env:APP_VERSION-Windows.exe"
+          $checksum = (Get-FileHash -LiteralPath (Join-Path dist $filename) -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$checksum  $filename" | Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding ascii
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64
+          path: |
+            dist/Server-Explorer-${{ steps.version.outputs.version }}-Windows.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload UI diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-diagnostics
+          path: test-output/*.png
+          if-no-files-found: ignore
+          retention-days: 7
