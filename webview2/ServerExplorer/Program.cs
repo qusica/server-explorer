@@ -23,10 +23,8 @@ internal static class Program
 internal sealed class ExplorerForm : Form
 {
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
-    readonly Dictionary<string, TaskCompletionSource<JsonElement>> hostReplies = new();
-    Process? backend;
+    NativeCore? native;
     bool quitting;
-    ExplorerForm? unused;
     public ExplorerForm()
     {
         Text = "Server Explorer";
@@ -54,78 +52,43 @@ internal sealed class ExplorerForm : Form
             };
             web.CoreWebView2.SetVirtualHostNameToFolderMapping("app.server-explorer.invalid",
                 Path.Combine(baseDir,"renderer"),CoreWebView2HostResourceAccessKind.DenyCors);
-            StartBackend();
+            native = new NativeCore(SendPage, HostRequest, Path.Combine(baseDir,"askpass.exe"));
             web.CoreWebView2.Navigate("https://app.server-explorer.invalid/index.html");
         }
         catch(Exception error) { MessageBox.Show(this,error.Message,"Server Explorer 启动失败",MessageBoxButtons.OK,MessageBoxIcon.Error); Close(); }
-    }
-    void StartBackend()
-    {
-        var executable=Path.Combine(AppContext.BaseDirectory,"node.exe");
-        var service=Path.Combine(AppContext.BaseDirectory,"backend","service.js");
-        backend=new Process { StartInfo = new ProcessStartInfo(executable) {
-            UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,
-            RedirectStandardError=true,Arguments="\"" + service + "\"",
-            WorkingDirectory=AppContext.BaseDirectory
-        },EnableRaisingEvents=true };
-        backend.StartInfo.Environment["SERVER_EXPLORER_USERDATA"] =
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"server-explorer");
-        backend.OutputDataReceived += (_,e) => {
-            if(e.Data is null)return;
-            BeginInvoke((Action)(()=>{try{_ = FromBackend(JsonDocument.Parse(e.Data).RootElement.Clone());}catch(Exception ex){Debug.WriteLine(ex);}}));
-        };
-        backend.ErrorDataReceived += (_,e) => {if(e.Data != null) Debug.WriteLine(e.Data);};
-        backend.Exited += (_,_) => {if(!quitting && IsHandleCreated)BeginInvoke((Action)(()=>MessageBox.Show(this,"后端服务意外结束。","Server Explorer")));};
-        if(!backend.Start())throw new Exception("Node 后端无法启动");
-        backend.BeginOutputReadLine();backend.BeginErrorReadLine();
-    }
-    void SendBackend(object value)
-    {
-        if(backend == null || backend.HasExited) throw new Exception("后端服务不可用");
-        backend.StandardInput.WriteLine(JsonSerializer.Serialize(value));
-        backend.StandardInput.Flush();
     }
     void SendPage(object value) {
         if(web.CoreWebView2 != null) web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(value));
     }
     static string Str(JsonElement element,string property,string fallback="") =>
         element.TryGetProperty(property,out var v) && v.ValueKind==JsonValueKind.String ? v.GetString()??fallback:fallback;
+    async Task<JsonElement> HostRequest(string name,object options)
+    {
+        if(name=="choose")
+        {
+            using var doc=JsonDocument.Parse(JsonSerializer.Serialize(options));
+            var files=Choose(doc.RootElement);
+            return JsonSerializer.SerializeToElement(files);
+        }
+        return JsonSerializer.SerializeToElement((object?)null);
+    }
     async Task FromPage(JsonElement msg)
     {
         if(Str(msg,"type")!="request")return;
         var id=Str(msg,"id");var channel=Str(msg,"channel");
-        if(channel=="native:filePath"){
-            SendPage(new {type="response",id,ok=true,value=""});
-            return;
-        }
-        SendBackend(new {type="request",id,channel,payload=msg.TryGetProperty("payload",out var p)?p:default(JsonElement)});
-        await Task.CompletedTask;
-    }
-    async Task FromBackend(JsonElement msg)
-    {
-        var type=Str(msg,"type");
-        if(type=="host-request")
-        {
-            var id=Str(msg,"id");
-            try {
-                var name=Str(msg,"name");
-                object? value=name=="choose"?Choose(msg.GetProperty("options")):null;
-                SendBackend(new {type="host-reply",id,value});
-            } catch(Exception ex) {SendBackend(new {type="host-reply",id,error=ex.Message});}
-        }
-        else if(type=="response")
-        {
-            var id=Str(msg,"id");
-            if(msg.TryGetProperty("value",out var value) && value.ValueKind==JsonValueKind.Object && value.TryGetProperty("__host",out var host))
-            {
-                var name=host.GetString();
-                if(name=="menu"){ ShowMenu(value);SendPage(new {type="response",id,ok=true,value=(object?)null});return; }
-                if(name=="drag"){ StartDrag(value);SendPage(new {type="response",id,ok=true,value=(object?)null});return; }
+        try {
+            var payload=msg.TryGetProperty("payload",out var p)?p:JsonSerializer.SerializeToElement(new{});
+            object? value;
+            if(channel=="native:filePath"){value="";}
+            else if(channel=="native:canClose"){value=native?.HasActiveTransfers??false;}
+            else if(native==null)throw new InvalidOperationException("原生后端未启动");
+            else value=await native.Handle(channel,payload);
+            if(value!=null && JsonSerializer.SerializeToElement(value) is JsonElement v && v.ValueKind==JsonValueKind.Object && v.TryGetProperty("__host",out var hostName)){
+                if(hostName.GetString()=="menu"){ShowMenu(v);value=null;}
+                else if(hostName.GetString()=="drag"){StartDrag(v);value=null;}
             }
-            SendPage(msg);
-        }
-        else if(type=="event" || type=="fatal")SendPage(msg);
-        await Task.CompletedTask;
+            SendPage(new{type="response",id,ok=true,value});
+        }catch(Exception error){SendPage(new{type="response",id,ok=false,error=error.Message});}
     }
     string[]? Choose(JsonElement options)
     {
@@ -168,9 +131,11 @@ internal sealed class ExplorerForm : Form
     }
     void OnClosing(object? sender,FormClosingEventArgs e)
     {
+        if(!quitting && native?.HasActiveTransfers==true) {
+            var choice=MessageBox.Show(this,"仍有文件正在传输，确定取消任务并退出？","退出应用",MessageBoxButtons.YesNo,MessageBoxIcon.Warning);
+            if(choice!=DialogResult.Yes){e.Cancel=true;return;}
+        }
         quitting=true;
-        try {SendBackend(new {type="shutdown"});}catch{}
-        try {if(backend is {HasExited:false})backend.Kill(entireProcessTree:true);}catch{}
-        backend?.Dispose();
+        if(native!=null)native.Shutdown().GetAwaiter().GetResult();
     }
 }
