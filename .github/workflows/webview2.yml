@@ -1,0 +1,62 @@
+name: WebView2 size experiment
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/service.js'
+      - 'src/renderer/**'
+      - 'webview2/**'
+      - '.github/workflows/webview2.yml'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install dependencies and build native SSH prompt helper
+        run: |
+          npm ci
+          node scripts/build-askpass.js
+          npm run check
+          npm test
+      - name: Package WebView2 experiment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path (Get-Location) 'dist/webview2'
+          New-Item -Type Directory -Force $stage, "$stage/backend/backend", "$stage/renderer", "$stage/resources" | Out-Null
+          dotnet publish webview2/ServerExplorer/ServerExplorer.csproj -c Release -r win-x64 --self-contained false -o $stage
+          Copy-Item (Get-Command node.exe).Source "$stage/node.exe"
+          Copy-Item src/service.js "$stage/backend/service.js"
+          Copy-Item src/backend/*.js "$stage/backend/backend/"
+          Copy-Item src/renderer/* "$stage/renderer/"
+          Copy-Item resources/askpass.exe "$stage/resources/askpass.exe"
+          Copy-Item package.json,package-lock.json $stage
+          npm ci --omit=dev --prefix $stage --ignore-scripts
+          $html = Get-Content -Raw "$stage/renderer/index.html"
+          $html = $html.Replace('<script src="app.js" defer></script>', '<script src="webview2-bridge.js"></script><script src="app.js" defer></script>')
+          Set-Content "$stage/renderer/index.html" $html -Encoding utf8
+          $exe = Get-Item "$stage/ServerExplorer.exe"
+          Compress-Archive "$stage/*" "dist/Server-Explorer-WebView2-experiment.zip" -Force
+          $zip = Get-Item "dist/Server-Explorer-WebView2-experiment.zip"
+          "WebView2 host EXE: $($exe.Length) bytes"
+          "WebView2 complete ZIP: $($zip.Length) bytes"
+          "WebView2 uncompressed directory: $((Get-ChildItem $stage -Recurse -File | Measure-Object Length -Sum).Sum) bytes"
+          "Baseline Electron v1.0.6 portable EXE: 100482956 bytes"
+          "Note: ZIP vs portable self-extracting EXE comparison is format-dependent."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webview2-windows-x64
+          path: dist/Server-Explorer-WebView2-experiment.zip
+          if-no-files-found: error
