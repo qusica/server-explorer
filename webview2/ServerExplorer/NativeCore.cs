@@ -108,7 +108,7 @@ internal sealed class NativeCore
         }
         return(name,token,Serve());
     }
-    (SftpWire wire,string alias,string identity) Session(string id)=>connections.TryGetValue(id,out var s)?s:throw new IOException("服务器尚未连接");
+    (string alias,SftpWire wire,string identity) Session(string id)=>connections.TryGetValue(id,out var s)?s:throw new IOException("服务器尚未连接");
     string Key(string id,string p)=>id=="local"?Path.GetFullPath(p):Remote(p);
     async Task<string> Canon(string id,string p)=>id=="local"?Path.GetFullPath(p):await Session(id).wire.RealPath(p);
     async Task<FileEntry> Stat(string id,string p)=>id=="local"?(FileEntry)LocalInfo(p):await Session(id).wire.Stat(p);
