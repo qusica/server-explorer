@@ -34,7 +34,7 @@ jobs:
           # The existing lightweight OpenSSH credential prompt is compiled by the framework C# compiler.
           $csc = "$env:WINDIR/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
           if (!(Test-Path $csc)) { throw 'Windows Framework CSC compiler unavailable' }
-          & $csc /nologo /target:winexe "/out:$stage/askpass.exe" resources/Askpass.cs
+          & $csc /nologo /target:winexe "/out:$stage/askpass.exe" (Join-Path (Get-Location) 'resources/Askpass.cs')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (Test-Path "$stage/node.exe") { throw 'Unexpected node.exe in native package' }
           if (Test-Path "$stage/backend") { throw 'Unexpected JS backend in native package' }
