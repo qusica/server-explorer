@@ -74,7 +74,11 @@ jobs:
         run: npm test
 
       - name: Run desktop UI tests
-        run: npm run test:ui
+        # Hosted Windows runners default to 1024x768, which clips native windows.
+        # https://github.com/actions/runner-images/issues/2935
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          npm run test:ui
 
       - name: Build Windows portable executable
         run: npm run build -- --publish never
