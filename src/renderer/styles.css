@@ -16,13 +16,15 @@
 .delete-selected:hover { color:#c94848; background:#fff0ef; }
 .button.primary.danger { background:#c94848; border-color:#c94848; }
 
-.panel-transfer-tools { display:flex; gap:8px; padding:9px 12px; border-bottom:1px solid #eef1f5; flex-shrink:0; }
-.panel-transfer-tools .button { flex:1; min-width:0; padding:8px 7px; font-size:11px; white-space:nowrap; color:var(--blue); border-color:#dce7ff; background:#f5f8ff; }
-.panel-transfer-tools .button:hover { background:#eaf1ff; }
-.panel-transfer-tools svg { width:15px; height:15px; }
 
-.panel-transfer-tools { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
-.panel-transfer-tools .drag-to-desktop { grid-column:1 / -1; color:#718099; border-color:var(--border); background:#fff; padding:6px 7px; }
 .native-drag-card { display:flex; flex-direction:column; align-items:center; gap:12px; padding:24px 16px; border:2px dashed #8cadf3; border-radius:9px; color:var(--blue); background:#f4f8ff; cursor:grab; user-select:none; }
 .native-drag-card span { font-size:11px; color:var(--muted); }
 .native-drag-card svg { width:28px; height:28px; }
+
+.server-group summary{display:flex;align-items:center;gap:7px;padding:10px 7px;cursor:pointer;color:#7a899f;font-size:11px;list-style:none}.server-group summary svg{width:12px;height:12px;transform:rotate(-90deg)}.server-group[open] summary svg{transform:none}.server-group summary span{flex:1;overflow:hidden;text-overflow:ellipsis}.server-group summary small{font-size:10px}.panel-file-tools .file-filter{flex:1;width:0}.tool-buttons{flex-shrink:0}.panel-file-tools .icon-button{width:25px;height:28px}.toggle-hidden[aria-pressed=true]{color:var(--blue);background:#edf3ff}
+
+.group-actions{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 8px}.group-actions .button{font-size:10px;padding:5px 7px}.group-actions [hidden]{display:none}.server-card.group-selected{background:#edf3ff;border-color:#8cadf3}.server-group summary .rename-group{width:23px;height:23px}.server-group summary .rename-group svg{width:13px;height:13px;transform:none}
+
+.server-group summary .move-group{width:21px;height:23px;flex-shrink:0}.server-group summary .move-group svg{width:12px;height:12px;transform:none}
+
+.list-heading{align-items:center;margin-top:14px;margin-bottom:6px;min-height:25px}.list-heading #batch-group{font-size:10px;letter-spacing:0;padding:4px 7px}.group-actions[hidden]{display:none}

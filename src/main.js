@@ -120,7 +120,12 @@ function setupIpc() {
     if (prompt.kind === 'trust' && ![null, 'yes', 'no'].includes(value)) throw new Error('请确认或取消主机身份');
     if (prompt.kind === 'delete' && ![null,'delete'].includes(value)) throw new Error('请确认或取消删除');
     if (prompt.kind === 'conflict' && ![null,'cancel','skip','skip-all',...(prompt.canReplace ? ['replace','replace-all'] : [])].includes(value)) throw new Error('操作无效');
-    prompt.finish(value);
+    if (prompt.requestId && ((prompt.kind === 'trust' && value !== 'yes') || (prompt.kind === 'secret' && value === null))) {
+      const session = attempts.get(prompt.requestId);
+      attempts.delete(prompt.requestId);
+      session?.sftp.close({ force: true });
+      for (const pending of [...prompts.values()]) if (pending.requestId === prompt.requestId) pending.finish(null);
+    } else prompt.finish(value);
   });
 }
 async function createWindow() {

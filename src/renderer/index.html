@@ -18,7 +18,8 @@
       <button id="open-local" class="button local-button"><i data-icon="computer"></i> 本地电脑 <span>打开文件面板</span></button>
       <div class="sidebar-title"><h2>服务器</h2><span id="server-count" class="count">0</span><button id="refresh-config" class="icon-button" title="重新读取 SSH 配置" aria-label="刷新服务器"><i data-icon="refresh"></i></button></div>
       <label class="search-box"><i data-icon="search"></i><input id="server-search" placeholder="搜索名称、地址…" aria-label="搜索服务器"><kbd>⌕</kbd></label>
-      <div class="list-heading">SSH CONFIG <span>点击打开面板</span></div>
+      <div class="list-heading"><span>SSH CONFIG</span><button id="batch-group" class="button subtle">批量分组</button></div>
+      <div class="group-actions" hidden><button id="select-servers" class="button subtle" hidden>全选当前结果</button><button id="apply-group" class="button subtle" hidden>设置分组</button><button id="cancel-group" class="button subtle" hidden>完成</button></div>
       <div id="server-list" class="server-list"></div>
       <div class="sidebar-bottom"><div class="config-caption"><span class="status-dot"></span> 自动读取本机配置</div><div id="config-path" class="config-path" title=""></div><button id="choose-config" class="button config-button"><i data-icon="folder"></i> 选择配置文件</button></div>
     </aside>

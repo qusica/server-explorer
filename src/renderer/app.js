@@ -1,5 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const icons = {
+  edit:'<path d="m15 4 5 5M4 20l5-1L21 7l-4-4L5 15l-1 5Z"/>',
+  eye:'<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   computer:'<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
   upload:'<path d="M12 16V3m-5 5 5-5 5 5M3 16v5h18v-5"/>',
   download:'<path d="M12 3v13m-5-5 5 5 5-5M3 16v5h18v-5"/>',
@@ -17,6 +19,7 @@ const icons = {
   move:'<path d="M12 3v18M3 12h18m-12-6 3-3 3 3m-6 12 3 3 3-3M6 9l-3 3 3 3m12-6 3 3-3 3"/>',
   transfer:'<path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/>',
   'arrow-right':'<path d="M4 12h16m-6-6 6 6-6 6"/>',
+  'arrow-down':'<path d="M12 4v16m-6-6 6 6 6-6"/>',
   'arrow-up':'<path d="M12 20V4m-6 6 6-6 6 6"/>',
   'chevron-down':'<path d="m6 9 6 6 6-6"/>',
   home:'<path d="m3 10 9-7 9 7v10H3V10Z"/><path d="M9 20v-7h6v7"/>',
@@ -36,6 +39,60 @@ function bytes(n) { if (!n) return '0 B'; const units = ['B','KB','MB','GB','TB'
 const date = timestamp => timestamp ? new Date(timestamp * 1000).toLocaleDateString('zh-CN', { month:'2-digit', day:'2-digit' }) : '—';
 let config = { servers: [], warnings: [], configPath: '' }, configLoading = true, configError = '', panels = [], demo = false, jobs = new Map(), toastTimer;
 const api = window.explorer;
+let serverGroups = {};
+try { serverGroups = JSON.parse(localStorage.getItem('server-groups') || '{}'); if (!serverGroups || typeof serverGroups !== 'object' || Array.isArray(serverGroups)) serverGroups = {}; } catch {}
+let serverGroupOrder = [];
+try { const saved = JSON.parse(localStorage.getItem('server-group-order') || '[]'); if (Array.isArray(saved)) serverGroupOrder = [...new Set(saved.filter(name => typeof name === 'string' && name))]; } catch {}
+function orderedGroupNames() {
+  const names = [...new Set((demo ? demoServers : config.servers).map(server => groupFor(server.alias)).filter(Boolean))];
+  return [...serverGroupOrder.filter(name => names.includes(name)), ...names.filter(name => !serverGroupOrder.includes(name))];
+}
+function saveGroupOrder(order) {
+  try { localStorage.setItem('server-group-order',JSON.stringify(order)); serverGroupOrder = order; return true; }
+  catch { toast('分组顺序保存失败，请重试'); return false; }
+}
+function moveServerGroup(name, offset) {
+  const order = orderedGroupNames(), index = order.indexOf(name), target = index + offset;
+  if (index < 0 || target < 0 || target >= order.length) return;
+  [order[index],order[target]] = [order[target],order[index]];
+  if (saveGroupOrder(order)) renderSidebar();
+}
+const collapsedGroups = new Set();
+try { const saved = JSON.parse(localStorage.getItem('server-group-collapsed') || '[]'); if (Array.isArray(saved)) for (const name of saved) if (typeof name === 'string') collapsedGroups.add(name); } catch {}
+function saveCollapsedGroups() {
+  try { localStorage.setItem('server-group-collapsed',JSON.stringify([...collapsedGroups])); }
+  catch { toast('分组展开状态保存失败，请重试'); }
+}
+let groupingMode = false;
+const selectedServers = new Set();
+function saveServerGroups(next) {
+  try { localStorage.setItem('server-groups',JSON.stringify(next)); serverGroups = next; renderSidebar(); return true; }
+  catch { toast('分组保存失败，请重试'); return false; }
+}
+async function renameServerGroup(name) {
+  const answer = await showModal({title:'分组改名',icon:'folder',message:'修改整个分组的名称；使用已有名称会合并两组，留空则移入未分组。',fields:[{name:'group',label:'分组名称',value:name}],buttons:[{label:'取消',value:null},{label:'保存',value:'save',primary:true}]});
+  if (!answer) return;
+  const newName = answer.group.trim().slice(0,80), next = {...serverGroups};
+  for (const alias of Object.keys(next)) if (groupFor(alias) === name) next[alias] = newName;
+  const order = orderedGroupNames();
+  const nextOrder = newName && order.includes(newName) && newName !== name ? order.filter(item => item !== name) : order.map(item => item === name ? newName : item).filter(Boolean);
+  if (saveServerGroups(next)) { saveGroupOrder(nextOrder); if (collapsedGroups.delete(name) && !order.includes(newName)) collapsedGroups.add(newName); saveCollapsedGroups(); renderSidebar(); }
+}
+async function batchServerGroup() {
+  const aliases = [...selectedServers];
+  if (!aliases.length) return;
+  const answer = await showModal({title:'批量设置分组',icon:'folder',message:`将选中的 ${aliases.length} 台服务器放入同一分组，留空则移入未分组。`,detail:aliases.join('\n'),fields:[{name:'group',label:'分组名称'}],buttons:[{label:'取消',value:null},{label:'保存',value:'save',primary:true}]});
+  if (!answer) return;
+  const next = {...serverGroups}, name = answer.group.trim().slice(0,80);
+  for (const alias of aliases) next[alias] = name;
+  if (saveServerGroups(next)) { selectedServers.clear(); groupingMode = false; collapsedGroups.delete(name); saveCollapsedGroups(); renderSidebar(); }
+}
+const groupFor = alias => typeof serverGroups[alias] === 'string' ? serverGroups[alias] : '';
+async function setServerGroup(alias) {
+  const answer = await showModal({title:'服务器分组',icon:'folder',message:'输入分组名称；同名服务器归为一组，留空则放入未分组。',detail:alias,fields:[{name:'group',label:'分组名称',value:groupFor(alias)}],buttons:[{label:'取消',value:null},{label:'保存',value:'save',primary:true}]});
+  if (!answer) return;
+  saveServerGroups({...serverGroups,[alias]:answer.group.trim().slice(0,80)});
+}
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
 function syncWorkspace() {
   $('#empty-workspace').hidden = panels.length > 0;
@@ -52,9 +109,43 @@ function renderSidebar() {
   $('#config-path').textContent = config.configPath || (configError ? '配置读取失败 · 点击刷新重试' : configLoading ? '正在读取配置…' : '尚未选择配置文件');
   $('#config-path').title = configError || config.configPath;
   const search = $('#server-search').value.trim().toLowerCase();
-  const filtered = servers.filter(s => `${s.alias} ${s.hostname} ${s.user}`.toLowerCase().includes(search));
-  $('#server-list').innerHTML = filtered.length ? filtered.map(s => `<button class="server-card ${panels.some(p => p.alias === s.alias) ? 'open' : ''} ${s.error ? 'invalid' : ''}" data-alias="${esc(s.alias)}" title="${esc(s.error || `${s.user}@${s.hostname}:${s.port}`)}"><span class="server-symbol">${icon('server')}</span><span class="server-info"><span class="server-name">${esc(s.alias)}</span><span class="server-address">${esc(s.hostname)}</span><span class="server-detail">${esc(s.user || '默认用户')} · :${s.port}${s.jump ? ' · 跳板机' : ''}</span></span><span class="status-dot"></span></button>`).join('') : `<div class="sidebar-empty">${search ? '没有匹配的服务器' : '还没有服务器<br>请检查 SSH config 或选择配置文件'}</div>`;
-  $('#server-list').querySelectorAll('.server-card').forEach(button => button.onclick = () => openServer(button.dataset.alias));
+  const filtered = servers.filter(s => `${s.alias} ${s.hostname} ${s.user} ${groupFor(s.alias)}`.toLowerCase().includes(search));
+  const available = new Set(servers.map(server => server.alias));
+  for (const alias of selectedServers) if (!available.has(alias)) selectedServers.delete(alias);
+  $('#batch-group').hidden = groupingMode;
+  $('.group-actions').hidden = !groupingMode;
+  for (const id of ['select-servers','apply-group','cancel-group']) $('#' + id).hidden = !groupingMode;
+  $('#apply-group').textContent = `设置分组 (${selectedServers.size})`;
+  $('#apply-group').disabled = !selectedServers.size;
+  $('#select-servers').disabled = !filtered.length;
+  $('#select-servers').onclick = () => { for (const server of filtered) selectedServers.add(server.alias); renderSidebar(); };
+  const groups = new Map();
+  for (const server of filtered) { const name = groupFor(server.alias); if (!groups.has(name)) groups.set(name,[]); groups.get(name).push(server); }
+  const groupOrder = orderedGroupNames();
+  const orderedGroups = [...groupOrder, ''].filter(name => groups.has(name)).map(name => [name,groups.get(name)]);
+  $('#server-list').innerHTML = filtered.length ? orderedGroups.map(([name,items]) => `<details class="server-group" data-group="${esc(name)}" ${search || !collapsedGroups.has(name) ? 'open' : ''}><summary>${icon('chevron-down')}<span>${esc(name || '未分组')}</span><small>${items.length}</small>${name ? `<button class="icon-button move-group" data-offset="-1" title="分组上移" aria-label="分组 ${esc(name)} 上移" ${groupOrder.indexOf(name) === 0 ? 'disabled' : ''}>${icon('arrow-up')}</button><button class="icon-button move-group" data-offset="1" title="分组下移" aria-label="分组 ${esc(name)} 下移" ${groupOrder.indexOf(name) === groupOrder.length - 1 ? 'disabled' : ''}>${icon('arrow-down')}</button><button class="icon-button rename-group" title="分组改名" aria-label="分组 ${esc(name)} 改名">${icon('edit')}</button>` : ''}</summary>${items.map(s => `<button class="server-card ${groupingMode && selectedServers.has(s.alias) ? 'group-selected' : ''} ${panels.some(p => p.alias === s.alias) ? 'open' : ''} ${s.error ? 'invalid' : ''}" data-alias="${esc(s.alias)}" title="${esc(s.error || `${s.user}@${s.hostname}:${s.port}`)}"><span class="server-symbol">${icon(groupingMode ? selectedServers.has(s.alias) ? 'check' : 'plus' : 'server')}</span><span class="server-info"><span class="server-name">${esc(s.alias)}</span><span class="server-address">${esc(s.hostname)}</span><span class="server-detail">${esc(s.user || '默认用户')} · :${s.port}${s.jump ? ' · 跳板机' : ''}</span></span><span class="status-dot"></span></button>`).join('')}</details>`).join('') : `<div class="sidebar-empty">${search ? '没有匹配的服务器' : '还没有服务器<br>请检查 SSH config 或选择配置文件'}</div>`;
+  $('#server-list').querySelectorAll('.server-card').forEach(button => {
+    button.onclick = () => {
+      if (!groupingMode) return openServer(button.dataset.alias);
+      const alias = button.dataset.alias;
+      if (selectedServers.has(alias)) selectedServers.delete(alias); else selectedServers.add(alias);
+      renderSidebar();
+    };
+    button.oncontextmenu = event => { event.preventDefault(); setServerGroup(button.dataset.alias); };
+    button.title += ' · 右键设置分组';
+  });
+  $('#server-list').querySelectorAll('.server-group').forEach(group => {
+    let previousOpen = group.open;
+    group.ontoggle = () => {
+      if (!group.isConnected || group.open === previousOpen) return;
+      previousOpen = group.open;
+      if (search) return;
+      if (group.open) collapsedGroups.delete(group.dataset.group); else collapsedGroups.add(group.dataset.group);
+      saveCollapsedGroups();
+    };
+  });
+  $('#server-list').querySelectorAll('.rename-group').forEach(button => button.onclick = event => { event.preventDefault(); event.stopPropagation(); renameServerGroup(button.closest('.server-group').dataset.group); });
+  $('#server-list').querySelectorAll('.move-group').forEach(button => button.onclick = event => { event.preventDefault(); event.stopPropagation(); moveServerGroup(button.closest('.server-group').dataset.group, Number(button.dataset.offset)); });
   $('#config-warning').hidden = demo || !(configError || config.warnings?.length);
   $('#config-warning').textContent = configError ? `读取 SSH 配置失败：${configError}。可点击左侧刷新按钮重试。` : (config.warnings || []).join('\n');
 }
@@ -94,14 +185,14 @@ async function loadDirectory(p, targetPath = p.path) {
   finally { if (version === p.loadVersion && panels.includes(p)) { p.loading = false; renderPanel(p); } }
 }
 function fileIcon(entry) { if (entry.type === 'directory') return 'folder'; if (entry.type === 'symlink') return 'link'; if (/\.(zip|tar|gz|tgz|bz2|7z)$/i.test(entry.name)) return 'archive'; return /\.(js|ts|py|json|yml|yaml|conf|sh|html|css|toml|md)$/i.test(entry.name) ? 'code' : 'file'; }
-function visibleEntries(p) { return p.entries.filter(e => e.name.toLowerCase().includes(p.filter.toLowerCase())); }
+function visibleEntries(p) { return p.entries.filter(e => (p.local || p.showHidden || !e.name.startsWith('.')) && e.name.toLowerCase().includes(p.filter.toLowerCase())); }
 function renderPanel(p) {
   const s = (demo ? demoServers : config.servers).find(s => s.alias === p.alias);
   const entries = visibleEntries(p);
   const connected = p.status === 'ready';
   const busy = p.loading || p.deleting || p.exporting || p.renaming;
   p.element.innerHTML = `<div class="panel-header"><div class="panel-symbol">${icon(p.local ? 'computer' : 'server')}</div><div class="panel-heading"><strong>${esc(p.alias)}</strong><span>${esc(p.local ? '本机文件与文件夹' : s ? `${s.user}@${s.hostname}` : p.alias)}</span></div><span class="connected-pill ${p.status === 'error' ? 'error' : ''}">${demo ? '演示' : p.status === 'connecting' ? '连接中' : connected ? p.local ? '本地' : '已连接' : '已断开'}</span><button class="icon-button close-panel" title="${p.status === 'connecting' ? '取消连接并关闭' : '关闭面板'}" aria-label="关闭 ${esc(p.alias)}" ${p.closing ? 'disabled' : ''}>${icon('close')}</button></div>
-    ${connected ? `<div class="panel-toolbar"><button class="icon-button go-parent" title="上级目录" ${busy || parent(p.path) === p.path ? 'disabled' : ''}>${icon('arrow-up')}</button><button class="icon-button go-home" title="主目录" ${busy ? 'disabled' : ''}>${icon('home')}</button><span class="path-icon">${icon('folder')}</span><input class="path-input" value="${esc(p.path)}" aria-label="${esc(p.alias)} 目录路径" title="输入绝对路径并按 Enter"><button class="icon-button refresh-panel" title="刷新目录" ${busy ? 'disabled' : ''}>${icon('refresh')}</button></div><div class="panel-transfer-tools">${!p.local ? `<button class="button upload-files" title="选择本地文件或文件夹并上传到当前服务器目录" ${busy ? 'disabled' : ''}>${icon('upload')}<span>从本地上传</span></button><button class="button download-selected" title="先选中服务器文件或文件夹，再选择本地保存目录" ${busy ? 'disabled' : ''}>${icon('download')}<span>下载到本地</span></button>` : ''}<button class="button drag-to-desktop" title="${p.local ? '将所选文件拖到桌面或资源管理器' : '先准备下载，再将文件拖到桌面或资源管理器'}" ${busy ? 'disabled' : ''}>${icon('move')}<span>${p.exporting ? '正在准备桌面文件…' : '拖到桌面 / 文件夹'}</span></button></div><div class="panel-file-tools"><input class="file-filter" placeholder="筛选当前目录…" value="${esc(p.filter)}" aria-label="筛选文件"><div class="tool-buttons">${p.local ? `<button class="icon-button choose-directory" title="选择本地目录" aria-label="选择本地目录" ${busy ? 'disabled' : ''}>${icon('folder')}</button>` : ''}<button class="icon-button delete-selected" title="永久删除所选项目" aria-label="删除所选项目" ${!p.selected.size || busy ? 'disabled' : ''}>${icon('trash')}</button><button class="icon-button copy-selected" title="复制所选文件到…" ${!p.selected.size || busy ? 'disabled' : ''}>${icon('copy')}</button><button class="icon-button create-folder" title="新建文件夹" ${busy ? 'disabled' : ''}>${icon('plus')}</button></div></div><div class="file-columns"><span>名称</span><span>大小</span><span>修改日期</span></div>` : ''}
+    ${connected ? `<div class="panel-toolbar"><button class="icon-button go-parent" title="上级目录" ${busy || parent(p.path) === p.path ? 'disabled' : ''}>${icon('arrow-up')}</button><button class="icon-button go-home" title="主目录" ${busy ? 'disabled' : ''}>${icon('home')}</button><span class="path-icon">${icon('folder')}</span><input class="path-input" value="${esc(p.path)}" aria-label="${esc(p.alias)} 目录路径" title="输入绝对路径并按 Enter"><button class="icon-button refresh-panel" title="刷新目录" ${busy ? 'disabled' : ''}>${icon('refresh')}</button></div><div class="panel-file-tools"><input class="file-filter" placeholder="筛选当前目录…" value="${esc(p.filter)}" aria-label="筛选文件"><div class="tool-buttons">${p.local ? `<button class="icon-button choose-directory" title="选择本地目录" aria-label="选择本地目录" ${busy ? 'disabled' : ''}>${icon('folder')}</button>` : ''}${!p.local ? `<button class="icon-button upload-files" title="从本地上传" aria-label="从本地上传" ${busy ? 'disabled' : ''}>${icon('upload')}</button><button class="icon-button download-selected" title="下载到本地" aria-label="下载到本地" ${busy || !p.selected.size ? 'disabled' : ''}>${icon('download')}</button>` : ''}<button class="icon-button drag-to-desktop" title="${p.exporting ? '正在准备桌面文件…' : '拖到桌面 / 文件夹'}" aria-label="拖到桌面 / 文件夹" ${busy || !p.selected.size ? 'disabled' : ''}>${icon('move')}</button><button class="icon-button toggle-hidden" title="${p.showHidden ? '隐藏隐藏文件' : '显示隐藏文件'}" aria-label="显示隐藏文件" aria-pressed="${!!p.showHidden}" ${busy ? 'disabled' : ''}>${icon('eye')}</button><button class="icon-button copy-selected" title="复制所选文件到…" ${!p.selected.size || busy ? 'disabled' : ''}>${icon('copy')}</button><button class="icon-button create-folder" title="新建文件夹" ${busy ? 'disabled' : ''}>${icon('plus')}</button></div></div><div class="file-columns"><span>名称</span><span>大小</span><span>修改日期</span></div>` : ''}
     ${p.status === 'connecting' || p.loading ? '<div class="panel-state"><div class="spinner"></div><p>正在'+(p.loading ? '读取文件列表' : '建立安全连接')+'…</p></div>' : p.status === 'error' ? `<div class="panel-state">${icon('warning')}<p>${esc(p.error)}</p><button class="button reconnect-panel">重新连接</button></div>` : `<div class="file-list" tabindex="0" aria-label="${esc(p.alias)} 文件列表">${entries.length ? entries.map(e => `<div class="file-row ${e.type} ${p.selected.has(e.name) ? 'selected' : ''}" draggable="true" data-name="${esc(e.name)}" title="${esc(e.name)}${e.type === 'symlink' ? '（符号链接，复制时保留链接）' : ''}"><div class="file-name">${icon(fileIcon(e))}<span>${esc(e.name)}</span></div><span class="file-size">${e.type === 'directory' ? '—' : bytes(e.size)}</span><span class="file-date">${date(e.mtime)}</span></div>`).join('') : '<div class="directory-empty">'+(p.error ? esc(p.error) : p.filter ? '没有匹配的文件' : '此文件夹是空的，拖入文件开始复制')+'</div>'}</div>`}
     <div class="panel-footer"><span>${connected ? `${p.entries.length} 个项目` : 'SSH / SFTP'}</span><span class="selection-label">${p.selected.size ? `已选 ${p.selected.size} 项` : connected ? '拖入此面板，复制到当前目录' : '安全连接到远程服务器'}</span></div>`;
   p.element.querySelector('.close-panel').onclick = () => closePanel(p);
@@ -113,7 +204,7 @@ function renderPanel(p) {
   p.element.querySelector('.file-filter').oninput = event => { const start = event.target.selectionStart; p.filter = event.target.value; renderPanel(p); const input = p.element.querySelector('.file-filter'); input.focus(); input.setSelectionRange(start, start); };
   p.element.querySelector('.create-folder').onclick = () => createFolder(p);
   p.element.querySelector('.copy-selected').onclick = () => chooseTarget(p);
-  p.element.querySelector('.delete-selected').onclick = () => deleteSelected(p);
+  p.element.querySelector('.toggle-hidden').onclick = () => { p.showHidden = !p.showHidden; p.selected.clear(); p.anchor = -1; renderPanel(p); };
   p.element.querySelector('.drag-to-desktop').onclick = () => prepareDesktop(p);
   if (p.local) p.element.querySelector('.choose-directory').onclick = () => chooseLocalDirectory(p);
   else { p.element.querySelector('.upload-files').onclick = () => uploadFiles(p); p.element.querySelector('.download-selected').onclick = () => downloadSelected(p); }
@@ -157,7 +248,7 @@ function renderPanel(p) {
 }
 function validDrag(event) { return [...event.dataTransfer.types].some(type => type === 'application/x-server-explorer' || (!demo && type === 'Files')); }
 function clearDrag() { document.querySelectorAll('.drag-over,.drop-folder').forEach(el => el.classList.remove('drag-over','drop-folder')); }
-function updateSelection(p) { p.element.querySelectorAll('.file-row').forEach(row => row.classList.toggle('selected', p.selected.has(row.dataset.name))); p.element.querySelector('.selection-label').textContent = p.selected.size ? `已选 ${p.selected.size} 项` : '拖入此面板，复制到当前目录'; for (const button of p.element.querySelectorAll('.copy-selected,.delete-selected')) button.disabled = !p.selected.size || p.loading || p.deleting; const download = p.element.querySelector('.download-selected'); if (download) download.disabled = !!(p.loading || p.deleting || p.exporting || p.renaming); }
+function updateSelection(p) { p.element.querySelectorAll('.file-row').forEach(row => row.classList.toggle('selected', p.selected.has(row.dataset.name))); p.element.querySelector('.selection-label').textContent = p.selected.size ? `已选 ${p.selected.size} 项` : '拖入此面板，复制到当前目录'; for (const button of p.element.querySelectorAll('.copy-selected,.drag-to-desktop')) button.disabled = !p.selected.size || p.loading || p.deleting; const download = p.element.querySelector('.download-selected'); if (download) download.disabled = !p.selected.size || !!(p.loading || p.deleting || p.exporting || p.renaming); }
 async function closePanel(p) {
   if (p.closing) return;
   if (p.deleting) { toast('正在删除文件，请等待完成'); return; }
@@ -359,6 +450,11 @@ async function handlePrompt(prompt) {
   let value = answer;
   if (prompt.kind === 'secret') value = answer?.secret ?? null;
   if (prompt.kind === 'conflict') value = answer ? answer.action + (answer.all ? '-all' : '') : 'cancel';
+  const cancelled = prompt.requestId && ((prompt.kind === 'trust' && value !== 'yes') || (prompt.kind === 'secret' && value === null));
+  if (cancelled) {
+    const p = panels.find(panel => panel.connectRequestId === prompt.requestId);
+    if (p) { p.closing = true; panels = panels.filter(panel => panel !== p); p.element.remove(); syncWorkspace(); }
+  }
   try { await api.answer({ id:prompt.id,value }); } catch (error) { toast(error.message); }
 }
 function closePrompt(id) {
@@ -422,6 +518,7 @@ async function toggleDemo() {
   if (!demo) for (const p of panels) if (p.id) await api.disconnect({id:p.id});
   for (const j of jobs.values()) if (j.timer) clearInterval(j.timer);
   panels = []; jobs.clear(); $('#panels').replaceChildren(); $('#transfer-list').innerHTML = '<div class="transfer-empty">还没有传输任务</div>';
+  groupingMode = false; selectedServers.clear();
   demo = !demo; $('#mode-badge').hidden = !demo; $('#demo-button').textContent = demo ? '返回真实服务器' : '体验演示';
   $('#choose-config').disabled = demo; $('#refresh-config').disabled = demo; renderTransfers(); syncWorkspace();
   if (demo) for (const alias of ['production','staging','backup']) await openServer(alias);
@@ -430,6 +527,9 @@ $('#demo-button').onclick = () => toggleDemo().catch(error => toast(error.messag
 $('#empty-demo').onclick = () => toggleDemo().catch(error => toast(error.message));
 $('#open-local').onclick = () => openServer('本地电脑',true);
 $('#server-search').oninput = renderSidebar;
+$('#batch-group').onclick = () => { groupingMode = true; selectedServers.clear(); renderSidebar(); };
+$('#cancel-group').onclick = () => { groupingMode = false; selectedServers.clear(); renderSidebar(); };
+$('#apply-group').onclick = batchServerGroup;
 $('#refresh-config').onclick = () => loadConfig();
 $('#choose-config').onclick = () => loadConfig(true);
 $('#transfer-toggle').onclick = () => $('#transfer-section').classList.toggle('collapsed');

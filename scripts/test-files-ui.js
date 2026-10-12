@@ -10,6 +10,7 @@ async function run() {
   await fs.mkdir(remote); await fs.mkdir(path.join(local,'上传目录','子目录'),{recursive:true}); await fs.mkdir(downloads);
   await fs.writeFile(path.join(local,'中文.txt'),'test file contents'); await fs.writeFile(path.join(local,'拖入.txt'),'dropped contents');
   await fs.writeFile(path.join(local,'上传目录','子目录','zero.txt'),'');
+  await fs.writeFile(path.join(remote,'.hidden'),'hidden');
   const server = await testServer({tester:remote});
   const configPath = path.join(root,'config');
   await fs.writeFile(configPath,`Host file-test\n HostName 127.0.0.1\n User tester\n Port ${server.port}\n PreferredAuthentications password\n UserKnownHostsFile "${path.join(root,'known_hosts').replaceAll('\\','/')}"\n`);
@@ -28,18 +29,45 @@ async function run() {
       await app.evaluate(({dialog},files)=>{ dialog.showOpenDialog=async(_,options)=>{globalThis.lastPickerOptions=options; return {canceled:false,filePaths:files};}; },files);
     }
     await chooser([configPath]); await page.locator('#choose-config').click();
+    await page.locator('.server-card[data-alias="file-test"]').click({button:'right'});
+    await page.locator('#modal-fields input').fill('测试分组');
+    await page.locator('#modal-actions .primary').click();
+    assert.equal(await page.locator('.server-group[data-group="测试分组"] .server-card').count(),1);
+    await page.locator('.server-group[data-group="测试分组"] summary').click();
+    assert.equal(await page.locator('.server-card[data-alias="file-test"]').isVisible(),false);
+    await page.locator('.server-group[data-group="测试分组"] summary').click();
     await page.locator('.server-card[data-alias="file-test"]').click();
+    await page.locator('#modal').waitFor({state:'visible'});
+    await page.waitForFunction(()=>document.querySelector('#modal-title').textContent==='确认服务器身份');
+    await page.locator('#modal-actions .button').first().click();
+    await page.waitForFunction(()=>panels.length===0);
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator('#modal').isVisible(),false,'trust cancellation ends the attempt');
+    await page.locator('.server-card[data-alias="file-test"]').click();
+    await page.locator('#modal').waitFor({state:'visible'});
     await page.waitForFunction(()=>document.querySelector('#modal-title').textContent==='确认服务器身份');
     await page.locator('#modal-actions .primary').click();
+    await page.locator('#modal').waitFor({state:'visible'});
+    await page.waitForFunction(()=>document.querySelector('#modal-title').textContent==='SSH 身份验证');
+    await page.locator('#modal-actions .button').first().click();
+    await page.waitForFunction(()=>panels.length===0);
+    await page.waitForTimeout(400);
+    assert.equal(await page.locator('#modal').isVisible(),false,'password cancellation does not retry');
+    await page.locator('.server-card[data-alias="file-test"]').click();
+    await page.locator('#modal').waitFor({state:'visible'});
     await page.waitForFunction(()=>document.querySelector('#modal-title').textContent==='SSH 身份验证');
     await page.locator('#modal-fields input').fill('test-password'); await page.locator('#modal-actions .primary').click();
     const panel = page.locator('.panel').first(); await panel.locator('.upload-files').waitFor();
     const downloadButton = panel.getByRole('button',{name:'下载到本地',exact:true});
-    assert.ok(await downloadButton.isVisible(),'download has a visible text label');
-    assert.ok(await downloadButton.isEnabled(),'download remains discoverable without a selection');
-    await downloadButton.click();
-    await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('请先在服务器面板中选中'));
-    assert.equal(await page.locator('#modal').isVisible(),false,'empty selection shows guidance rather than doing nothing');
+    assert.ok(await downloadButton.isVisible(),'download icon is accessible');
+    assert.ok(await downloadButton.isDisabled(),'download needs a selection');
+    assert.equal(await panel.locator('.delete-selected').count(),0);
+    assert.equal(await panel.locator('.panel-transfer-tools').count(),0);
+    assert.equal(await panel.locator('.file-row[data-name=".hidden"]').count(),0);
+    await panel.locator('.toggle-hidden').click();
+    await panel.locator('.file-row[data-name=".hidden"]').waitFor();
+    await panel.locator('.toggle-hidden').click();
+    assert.equal(await panel.locator('.file-row[data-name=".hidden"]').count(),0);
     let completed = 0;
     async function finishCopy() {
       await page.locator('#modal').waitFor({state:'visible'}); await page.locator('#modal-actions .primary').click();
@@ -88,7 +116,7 @@ async function run() {
     await panel.locator('.download-selected').click(); await finishCopy();
     assert.deepEqual(await app.evaluate(()=>globalThis.lastPickerOptions.properties),['openDirectory']);
     assert.equal((await fs.stat(path.join(downloads,'上传目录','子目录','zero.txt'))).size,0);
-    await panel.locator('.file-row[data-name="上传目录"]').click(); await panel.locator('.delete-selected').click();
+    await panel.locator('.file-row[data-name="上传目录"]').click(); await panel.locator('.file-list').press('Delete');
     await page.locator('#modal').waitFor({state:'visible'});
     const blocked = await page.evaluate(async localFile=>{
       try { await window.explorer.transfer({sourceId:'local',targetId:panels[0].id,paths:[localFile],targetPath:'/'}); return ''; } catch(error) { return error.message; }
@@ -97,7 +125,7 @@ async function run() {
     await page.locator('#modal-actions .button').first().click();
     await panel.locator('.file-row[data-name="上传目录"]').waitFor();
     assert.equal((await fs.stat(path.join(remote,'上传目录','子目录','zero.txt'))).size,0);
-    await panel.locator('.file-row[data-name="上传目录"]').click(); await panel.locator('.delete-selected').click();
+    await panel.locator('.file-row[data-name="上传目录"]').click(); await panel.locator('.file-list').press('Delete');
     await page.locator('#modal').waitFor({state:'visible'}); await page.locator('#modal-actions .danger').click();
     await panel.locator('.file-row[data-name="上传目录"]').waitFor({state:'detached'});
     await assert.rejects(fs.stat(path.join(remote,'上传目录')),error=>error.code==='ENOENT');
