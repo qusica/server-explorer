@@ -1,6 +1,6 @@
 {
   "name": "server-explorer",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "SSH 多服务器文件管理与跨服务器拖拽复制",
   "main": "src/main.js",
   "author": "Server Explorer",
