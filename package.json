@@ -1,6 +1,6 @@
 {
   "name": "server-explorer",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "SSH 多服务器文件管理与跨服务器拖拽复制",
   "main": "src/main.js",
   "author": "Server Explorer",
@@ -18,7 +18,7 @@
     "test": "node --test test/config.test.js test/local.test.js test/integration.test.js test/remote-copy.test.js test/trusted-page.test.js",
     "check": "node scripts/check.js",
     "test:ui": "node scripts/test-ui.js && node scripts/test-files-ui.js",
-    "build": "node scripts/build-askpass.js && electron-builder --win portable --x64",
+    "build": "node scripts/build-askpass.js && electron-builder --win nsis --x64",
     "pack": "node scripts/build-askpass.js && electron-builder --win --dir --x64"
   },
   "engines": {
@@ -52,13 +52,19 @@
       }
     ],
     "win": {
-      "target": "portable",
+      "target": "nsis",
       "icon": "resources/app.ico",
       "signExecutable": false
     },
-    "portable": {
-      "artifactName": "Server-Explorer-${version}-Windows.exe"
-    },
-    "npmRebuild": false
+    "npmRebuild": false,
+    "nsis": {
+      "artifactName": "Server-Explorer-${version}-Windows-Setup.exe",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
+    }
   }
 }

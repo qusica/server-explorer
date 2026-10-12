@@ -74,26 +74,24 @@ jobs:
         run: npm test
 
       - name: Run desktop UI tests
+        if: inputs.release-tag == ''
         # Hosted Windows runners default to 1024x768, which clips native windows.
         # https://github.com/actions/runner-images/issues/2935
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           npm run test:ui
 
-      - name: Build Windows portable executable
+      - name: Build Windows NSIS installer
         run: npm run build -- --publish never
 
       - name: Test packaged application
         run: node scripts/smoke-package.js
 
-      - name: Test portable launcher
-        run: node scripts/test-portable-launcher.js
-
       - name: Calculate SHA-256
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $filename = "Server-Explorer-$env:APP_VERSION-Windows.exe"
+          $filename = "Server-Explorer-$env:APP_VERSION-Windows-Setup.exe"
           $checksum = (Get-FileHash -LiteralPath (Join-Path dist $filename) -Algorithm SHA256).Hash.ToLowerInvariant()
           "$checksum  $filename" | Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding ascii
 
@@ -102,7 +100,7 @@ jobs:
         with:
           name: windows-x64
           path: |
-            dist/Server-Explorer-${{ steps.version.outputs.version }}-Windows.exe
+            dist/Server-Explorer-${{ steps.version.outputs.version }}-Windows-Setup.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
           compression-level: 0

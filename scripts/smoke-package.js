@@ -7,7 +7,7 @@ const asar = require('@electron/asar');
 async function run() {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(),'explorer-package-'));
   const env = {...process.env}; delete env.ELECTRON_RUN_AS_NODE;
-  const app = await electron.launch({ executablePath:path.resolve('dist','win-unpacked','Server Explorer.exe'), args:['--user-data-dir='+profile],env });
+  const app = await electron.launch({ executablePath:path.resolve(process.env.EXPLORER_BUILD_DIR || 'dist','win-unpacked','Server Explorer.exe'), args:['--user-data-dir='+profile],env });
   try {
     const page = await app.firstWindow();
     await page.waitForSelector('.server-card');
@@ -15,7 +15,14 @@ async function run() {
     await page.locator('#demo-button').click();
     await page.waitForSelector('.panel:nth-child(3) .file-row');
     assert.equal(await page.locator('.panel').count(),3);
-    assert.equal(await page.locator('.download-selected').first().innerText(),'下载到本地');
+    const panel = page.locator('.panel').first();
+    const download = panel.getByRole('button',{name:'下载到本地',exact:true});
+    assert.ok(await download.isVisible(),'packaged download icon is accessible');
+    assert.ok(await download.isDisabled(),'download requires a selection');
+    assert.equal(await panel.locator('.panel-file-tools .download-selected').count(),1,'download belongs to compact toolbar');
+    assert.equal(await panel.locator('.panel-transfer-tools,.delete-selected').count(),0,'old transfer toolbar and delete button are removed');
+    await panel.locator('.file-row[data-name="deploy.sh"]').click();
+    assert.ok(await download.isEnabled(),'selecting a file enables download');
     assert.equal(await page.evaluate(()=>typeof window.explorer.contextMenu),'function');
     assert.equal(await page.evaluate(()=>typeof window.explorer.startDrag),'function');
     const packaged = await app.evaluate(({app}) => ({resourcesPath:process.resourcesPath,appPath:app.getAppPath()}));

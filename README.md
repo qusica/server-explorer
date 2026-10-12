@@ -40,7 +40,7 @@ ssh -V
 
 ### 启动应用
 
-从 [Releases 页面](https://github.com/qusica/server-explorer/releases/latest)下载 `Server-Explorer-<版本>-Windows.exe`，双击启动即可，无需安装。
+从 [Releases 页面](https://github.com/qusica/server-explorer/releases/latest)下载 `Server-Explorer-<版本>-Windows-Setup.exe`，运行安装向导，安装后通过桌面或开始菜单快捷方式启动。安装版只在安装时解压，后续启动无需重复解压。
 
 也可以按下方的[开发与构建](#开发与构建)说明，从源码运行。
 
@@ -185,14 +185,14 @@ npm run test:ui
 ### 打包
 
 ```powershell
-# 生成 Windows x64 便携版单文件程序
+# 生成 Windows x64 NSIS 安装程序
 npm run build
 
 # 生成解包版应用目录
 npm run pack
 ```
 
-产物位于 `dist/`：便携版为 `Server-Explorer-<版本>-Windows.exe`，解包版为 `win-unpacked/`。当前构建未配置商业代码签名。
+产物位于 `dist/`：安装版为 `Server-Explorer-<版本>-Windows-Setup.exe`，解包版为 `win-unpacked/`。当前构建未配置商业代码签名。
 
 ### 项目结构
 
@@ -246,7 +246,7 @@ server-explorer/
 
 ## 自动发布
 
-GitHub Actions 会在推送到 `main` 或提交 Pull Request 时运行 Windows 检查、测试与打包。推送 `v<版本>` 标签时，Release 工作流会验证标签与 `package.json`、`package-lock.json` 的版本一致，完成测试与打包后自动创建 Release，附上 Windows x64 便携程序和 `SHA256SUMS.txt`。
+GitHub Actions 会在推送到 `main` 或提交 Pull Request 时运行 Windows 检查、测试与打包。推送 `v<版本>` 标签时，Release 工作流会验证标签与 `package.json`、`package-lock.json` 的版本一致，完成测试与打包后自动创建 Release，附上 Windows x64 NSIS 安装程序和 `SHA256SUMS.txt`。
 
 发布新版本时，在干净的工作区运行以下命令（以补丁版本升级为例）：
 
@@ -263,3 +263,5 @@ git push origin main --follow-tags
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。
+
+发布标签构建保留版本校验、代码检查、基础测试和打包应用启动检查；完整桌面界面测试在 main 和 Pull Request 构建中运行。

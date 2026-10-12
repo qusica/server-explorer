@@ -13,7 +13,7 @@ async function run() {
   await new Promise(resolve=>portServer.close(resolve));
   const env = {...process.env}; delete env.ELECTRON_RUN_AS_NODE;
   const version = require('../package.json').version;
-  const launcher = spawn(path.resolve('dist',`Server-Explorer-${version}-Windows.exe`),[`--remote-debugging-port=${port}`,'--user-data-dir='+profile],{env,windowsHide:true,stdio:'ignore'});
+  const launcher = spawn(path.resolve(process.env.EXPLORER_BUILD_DIR || 'dist',`Server-Explorer-${version}-Windows.exe`),[`--remote-debugging-port=${port}`,'--user-data-dir='+profile],{env,windowsHide:true,stdio:'ignore'});
   const exited = new Promise((resolve,reject)=>{launcher.once('exit',resolve);launcher.once('error',reject);});
   let browser, page;
   try {

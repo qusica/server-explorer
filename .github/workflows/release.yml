@@ -53,7 +53,7 @@ jobs:
             exit 1
           fi
           gh release create "$RELEASE_TAG" \
-            "dist/Server-Explorer-$APP_VERSION-Windows.exe" \
+            "dist/Server-Explorer-$APP_VERSION-Windows-Setup.exe" \
             dist/SHA256SUMS.txt \
             --verify-tag \
             --title "Server Explorer $RELEASE_TAG" \
