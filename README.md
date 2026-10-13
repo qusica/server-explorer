@@ -8,7 +8,7 @@ Server Explorer 是一款面向 **Windows** 的桌面文件管理工具。它读
 
 ![Server Explorer 多服务器工作区](docs/images/workspace.png)
 
-*截图来自内置演示模式，使用模拟服务器与文件数据。*
+*截图来自内置演示模式，使用模拟服务器与文件数据。运行 `node scripts/update-screenshots.js` 可重新生成截图。*
 
 ## 功能特点
 
