@@ -1,0 +1,50 @@
+name: WebView2 native size experiment
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'webview2/**'
+      - 'src/renderer/**'
+      - '.github/workflows/webview2.yml'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build native WebView2 app
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path (Get-Location) 'dist/webview2-native'
+          dotnet publish webview2/ServerExplorer/ServerExplorer.csproj -c Release -r win-x64 --self-contained false -o $stage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -Type Directory -Force "$stage/renderer" | Out-Null
+          Copy-Item src/renderer/* "$stage/renderer/"
+          $html = Get-Content -Raw "$stage/renderer/index.html"
+          $html = $html.Replace('<script src="app.js" defer></script>', '<script src="webview2-bridge.js"></script><script src="app.js" defer></script>')
+          Set-Content "$stage/renderer/index.html" $html -Encoding utf8
+          # The existing lightweight OpenSSH credential prompt is compiled by the framework C# compiler.
+          $csc = "$env:WINDIR/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+          if (!(Test-Path $csc)) { throw 'Windows Framework CSC compiler unavailable' }
+          & $csc /nologo /target:winexe "/out:$stage/askpass.exe" (Join-Path (Get-Location) 'resources/Askpass.cs')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path "$stage/node.exe") { throw 'Unexpected node.exe in native package' }
+          if (Test-Path "$stage/backend") { throw 'Unexpected JS backend in native package' }
+          Compress-Archive "$stage/*" "dist/Server-Explorer-WebView2-native.zip" -Force
+          $zip = Get-Item "dist/Server-Explorer-WebView2-native.zip"
+          "Native WebView2 ZIP: $($zip.Length) bytes"
+          "Native WebView2 files: $((Get-ChildItem $stage -Recurse -File | Measure-Object Length -Sum).Sum) bytes"
+          "Original Electron v1.0.6 portable EXE: 100482956 bytes"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webview2-native-windows-x64
+          path: dist/Server-Explorer-WebView2-native.zip
+          if-no-files-found: error
