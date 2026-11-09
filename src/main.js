@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { isTrustedPage } = require('./backend/trusted-page');
 const { discover, defaultConfig } = require('./backend/config');
+const { readFavorites, updateFavorite } = require('./backend/favorites');
 const { Sftp } = require('./backend/sftp');
 const { Transfers, safeName } = require('./backend/transfers');
 const { localSession, localPath } = require('./backend/local');
@@ -61,7 +62,7 @@ function setupIpc() {
       for (const prompt of prompts.values()) if (prompt.requestId === requestId) prompt.finish(null);
       send('server:closed', { id, error });
     });
-    try { await sftp.ready; const home = await sftp.realpath('.'); return { id, alias, home, ...entry }; }
+    try { await sftp.ready; const home = await sftp.realpath('.'); session.home = home; return { id, alias, home, ...entry }; }
     catch (error) { sftp.close(); sessions.delete(id); throw error; }
   });
   register('server:cancelConnect', async ({ requestId }) => {
@@ -73,6 +74,8 @@ function setupIpc() {
   register('server:disconnect', async ({ id }) => { if (deleting.has(id) || renaming.has(id)) throw new Error('正在进行文件操作，请等待完成'); if (transfers.usesSession(id)) throw new Error('此服务器有未完成的传输，请先取消或等待完成'); sessions.get(id)?.sftp.close(); });
   register('server:list', async ({ id, path: p }) => { const sftp = getSession(id).sftp; const canonical = await sftp.realpath(endpointPath(id, p)); return { path: canonical, entries: await sftp.list(canonical) }; });
   register('server:mkdir', async ({ id, path: p, name }) => { const sftp = getSession(id).sftp; await sftp.mkdir((sftp.path || path.posix).join(endpointPath(id,p), (sftp.safeName || safeName)(name))); });
+  register('favorites:read', ({id}) => readFavorites(getSession(id)));
+  register('favorites:update', ({id, path, remove}) => updateFavorite(getSession(id), path, remove === true));
   register('local:open', async () => ({ id:local.id, alias:local.alias, home:local.home, local:true }));
   register('local:choose', async ({ directory = false, multiple = false, purpose } = {}) => {
     const downloading = directory && purpose === 'download';

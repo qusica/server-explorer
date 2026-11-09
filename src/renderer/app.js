@@ -39,6 +39,30 @@ function bytes(n) { if (!n) return '0 B'; const units = ['B','KB','MB','GB','TB'
 const date = timestamp => timestamp ? new Date(timestamp * 1000).toLocaleDateString('zh-CN', { month:'2-digit', day:'2-digit' }) : '—';
 let config = { servers: [], warnings: [], configPath: '' }, configLoading = true, configError = '', panels = [], demo = false, jobs = new Map(), toastTimer;
 const api = window.explorer;
+const demoFavorites = new Map();
+function favoritesFor(p) { return p.favorites || []; }
+async function saveFavorite(p, target, remove) {
+ if (p.favoriteBusy) return;
+ p.favoriteBusy = true; renderPanel(p);
+ try {
+   if (demo) { p.favorites = remove ? favoritesFor(p).filter(value => value !== target) : [...new Set([...favoritesFor(p),target])]; demoFavorites.set(p.alias,p.favorites); }
+   else p.favorites = await api.updateFavorite({id:p.id,path:target,remove});
+   p.favoriteError = '';
+ } catch (error) { toast('收藏保存失败：' + error.message); }
+ finally { p.favoriteBusy = false; if (panels.includes(p)) renderPanel(p); }
+}
+function toggleFavorite(p) { return saveFavorite(p,p.path,favoritesFor(p).includes(p.path)); }
+function favoritesMarkup(p, busy) {
+ if (p.local) return '';
+ busy = busy || p.favoriteBusy;
+ const paths = favoritesFor(p), saved = paths.includes(p.path);
+ return '<div class="path-favorites"><button class="button toggle-favorite" aria-pressed="'+saved+'" '+(busy || p.error ? 'disabled' : '')+'>'+(saved ? '★ 取消收藏' : '☆ 收藏当前路径')+'</button><select class="favorite-path" aria-label="收藏路径" '+(busy || !paths.length ? 'disabled' : '')+'><option value="">'+(paths.length ? '常用路径（'+paths.length+'）' : (p.favoriteError ? '收藏读取失败，请重连重试' : '暂无收藏路径'))+'</option>'+paths.map(value => '<option value="'+esc(value)+'">'+esc(value)+'</option>').join('')+'</select><button class="button remove-favorite" '+(busy || !paths.length ? 'disabled' : '')+'>管理收藏</button></div>';
+}
+async function removeFavorite(p) {
+ const answer = await showModal({title:'管理收藏',icon:'folder',message:'选择需要移除的收藏，不影响服务器文件。',fields:[{name:'path',type:'select',label:'路径',options:favoritesFor(p).map(value => ({value,label:value}))}],buttons:[{label:'取消',value:null},{label:'移除收藏',value:'remove',primary:true}]});
+ if (!answer) return;
+ await saveFavorite(p,answer.path,true);
+}
 let serverGroups = {};
 try { serverGroups = JSON.parse(localStorage.getItem('server-groups') || '{}'); if (!serverGroups || typeof serverGroups !== 'object' || Array.isArray(serverGroups)) serverGroups = {}; } catch {}
 let serverGroupOrder = [];
@@ -170,7 +194,14 @@ async function connectPanel(p) {
   try {
     const session = demo ? { id:`demo-${p.alias}`, alias:p.alias, home:'/home/deploy', ...demoServers.find(s => s.alias === p.alias) } : p.local ? await api.openLocal() : await api.connect({ alias:p.alias, requestId });
     if (!panels.includes(p) || p.closing || p.connectRequestId !== requestId) return;
-    Object.assign(p, session); p.path = p.home; p.status = 'ready'; await loadDirectory(p, p.home);
+    Object.assign(p, session);
+    if (!p.local) {
+      p.favorites = []; p.favoriteError = '';
+      try { p.favorites = demo ? demoFavorites.get(p.alias) || [] : await api.readFavorites({id:p.id}); }
+      catch (error) { p.favoriteError = error.message; toast('收藏读取失败：' + error.message); }
+      if (!panels.includes(p) || p.closing || p.connectRequestId !== requestId) return;
+    }
+    p.path = p.home; p.status = 'ready'; await loadDirectory(p, p.home);
   } catch (error) { if (!panels.includes(p) || p.closing || p.connectRequestId !== requestId) return; p.status = 'error'; p.error = error.message; renderPanel(p); }
   syncWorkspace();
 }
@@ -192,11 +223,16 @@ function renderPanel(p) {
   const connected = p.status === 'ready';
   const busy = p.loading || p.deleting || p.exporting || p.renaming;
   p.element.innerHTML = `<div class="panel-header"><div class="panel-symbol">${icon(p.local ? 'computer' : 'server')}</div><div class="panel-heading"><strong>${esc(p.alias)}</strong><span>${esc(p.local ? '本机文件与文件夹' : s ? `${s.user}@${s.hostname}` : p.alias)}</span></div><span class="connected-pill ${p.status === 'error' ? 'error' : ''}">${demo ? '演示' : p.status === 'connecting' ? '连接中' : connected ? p.local ? '本地' : '已连接' : '已断开'}</span><button class="icon-button close-panel" title="${p.status === 'connecting' ? '取消连接并关闭' : '关闭面板'}" aria-label="关闭 ${esc(p.alias)}" ${p.closing ? 'disabled' : ''}>${icon('close')}</button></div>
-    ${connected ? `<div class="panel-toolbar"><button class="icon-button go-parent" title="上级目录" ${busy || parent(p.path) === p.path ? 'disabled' : ''}>${icon('arrow-up')}</button><button class="icon-button go-home" title="主目录" ${busy ? 'disabled' : ''}>${icon('home')}</button><span class="path-icon">${icon('folder')}</span><input class="path-input" value="${esc(p.path)}" aria-label="${esc(p.alias)} 目录路径" title="输入绝对路径并按 Enter"><button class="icon-button refresh-panel" title="刷新目录" ${busy ? 'disabled' : ''}>${icon('refresh')}</button></div><div class="panel-file-tools"><input class="file-filter" placeholder="筛选当前目录…" value="${esc(p.filter)}" aria-label="筛选文件"><div class="tool-buttons">${p.local ? `<button class="icon-button choose-directory" title="选择本地目录" aria-label="选择本地目录" ${busy ? 'disabled' : ''}>${icon('folder')}</button>` : ''}${!p.local ? `<button class="icon-button upload-files" title="从本地上传" aria-label="从本地上传" ${busy ? 'disabled' : ''}>${icon('upload')}</button><button class="icon-button download-selected" title="下载到本地" aria-label="下载到本地" ${busy || !p.selected.size ? 'disabled' : ''}>${icon('download')}</button>` : ''}<button class="icon-button drag-to-desktop" title="${p.exporting ? '正在准备桌面文件…' : '拖到桌面 / 文件夹'}" aria-label="拖到桌面 / 文件夹" ${busy || !p.selected.size ? 'disabled' : ''}>${icon('move')}</button><button class="icon-button toggle-hidden" title="${p.showHidden ? '隐藏隐藏文件' : '显示隐藏文件'}" aria-label="显示隐藏文件" aria-pressed="${!!p.showHidden}" ${busy ? 'disabled' : ''}>${icon('eye')}</button><button class="icon-button copy-selected" title="复制所选文件到…" ${!p.selected.size || busy ? 'disabled' : ''}>${icon('copy')}</button><button class="icon-button create-folder" title="新建文件夹" ${busy ? 'disabled' : ''}>${icon('plus')}</button></div></div><div class="file-columns"><span>名称</span><span>大小</span><span>修改日期</span></div>` : ''}
+    ${connected ? `<div class="panel-toolbar"><button class="icon-button go-parent" title="上级目录" ${busy || parent(p.path) === p.path ? 'disabled' : ''}>${icon('arrow-up')}</button><button class="icon-button go-home" title="主目录" ${busy ? 'disabled' : ''}>${icon('home')}</button><span class="path-icon">${icon('folder')}</span><input class="path-input" value="${esc(p.path)}" aria-label="${esc(p.alias)} 目录路径" title="输入绝对路径并按 Enter"><button class="icon-button refresh-panel" title="刷新目录" ${busy ? 'disabled' : ''}>${icon('refresh')}</button></div>${favoritesMarkup(p, busy)}<div class="panel-file-tools"><input class="file-filter" placeholder="筛选当前目录…" value="${esc(p.filter)}" aria-label="筛选文件"><div class="tool-buttons">${p.local ? `<button class="icon-button choose-directory" title="选择本地目录" aria-label="选择本地目录" ${busy ? 'disabled' : ''}>${icon('folder')}</button>` : ''}${!p.local ? `<button class="icon-button upload-files" title="从本地上传" aria-label="从本地上传" ${busy ? 'disabled' : ''}>${icon('upload')}</button><button class="icon-button download-selected" title="下载到本地" aria-label="下载到本地" ${busy || !p.selected.size ? 'disabled' : ''}>${icon('download')}</button>` : ''}<button class="icon-button drag-to-desktop" title="${p.exporting ? '正在准备桌面文件…' : '拖到桌面 / 文件夹'}" aria-label="拖到桌面 / 文件夹" ${busy || !p.selected.size ? 'disabled' : ''}>${icon('move')}</button><button class="icon-button toggle-hidden" title="${p.showHidden ? '隐藏隐藏文件' : '显示隐藏文件'}" aria-label="显示隐藏文件" aria-pressed="${!!p.showHidden}" ${busy ? 'disabled' : ''}>${icon('eye')}</button><button class="icon-button copy-selected" title="复制所选文件到…" ${!p.selected.size || busy ? 'disabled' : ''}>${icon('copy')}</button><button class="icon-button create-folder" title="新建文件夹" ${busy ? 'disabled' : ''}>${icon('plus')}</button></div></div><div class="file-columns"><span>名称</span><span>大小</span><span>修改日期</span></div>` : ''}
     ${p.status === 'connecting' || p.loading ? '<div class="panel-state"><div class="spinner"></div><p>正在'+(p.loading ? '读取文件列表' : '建立安全连接')+'…</p></div>' : p.status === 'error' ? `<div class="panel-state">${icon('warning')}<p>${esc(p.error)}</p><button class="button reconnect-panel">重新连接</button></div>` : `<div class="file-list" tabindex="0" aria-label="${esc(p.alias)} 文件列表">${entries.length ? entries.map(e => `<div class="file-row ${e.type} ${p.selected.has(e.name) ? 'selected' : ''}" draggable="true" data-name="${esc(e.name)}" title="${esc(e.name)}${e.type === 'symlink' ? '（符号链接，复制时保留链接）' : ''}"><div class="file-name">${icon(fileIcon(e))}<span>${esc(e.name)}</span></div><span class="file-size">${e.type === 'directory' ? '—' : bytes(e.size)}</span><span class="file-date">${date(e.mtime)}</span></div>`).join('') : '<div class="directory-empty">'+(p.error ? esc(p.error) : p.filter ? '没有匹配的文件' : '此文件夹是空的，拖入文件开始复制')+'</div>'}</div>`}
     <div class="panel-footer"><span>${connected ? `${p.entries.length} 个项目` : 'SSH / SFTP'}</span><span class="selection-label">${p.selected.size ? `已选 ${p.selected.size} 项` : connected ? '拖入此面板，复制到当前目录' : '安全连接到远程服务器'}</span></div>`;
   p.element.querySelector('.close-panel').onclick = () => closePanel(p);
   if (!connected) { const reconnect = p.element.querySelector('.reconnect-panel'); if (reconnect) reconnect.onclick = () => connectPanel(p); return; }
+  if (!p.local) {
+    p.element.querySelector('.toggle-favorite').onclick = () => toggleFavorite(p);
+    p.element.querySelector('.remove-favorite').onclick = () => removeFavorite(p);
+    p.element.querySelector('.favorite-path').onchange = event => { if (event.target.value) loadDirectory(p,event.target.value); };
+  }
   p.element.querySelector('.go-parent').onclick = () => loadDirectory(p, parent(p.path));
   p.element.querySelector('.go-home').onclick = () => loadDirectory(p, p.home);
   p.element.querySelector('.refresh-panel').onclick = () => loadDirectory(p);

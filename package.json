@@ -1,6 +1,6 @@
 {
   "name": "server-explorer",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "SSH 多服务器文件管理与跨服务器拖拽复制",
   "main": "src/main.js",
   "author": "Server Explorer",
@@ -15,9 +15,9 @@
   },
   "scripts": {
     "start": "node scripts/build-askpass.js && electron .",
-    "test": "node --test test/config.test.js test/local.test.js test/integration.test.js test/remote-copy.test.js test/trusted-page.test.js",
+    "test": "node --test test/favorites.test.js test/config.test.js test/local.test.js test/integration.test.js test/remote-copy.test.js test/trusted-page.test.js",
     "check": "node scripts/check.js",
-    "test:ui": "node scripts/test-ui.js && node scripts/test-files-ui.js",
+    "test:ui": "node scripts/test-favorites-ui.js && node scripts/test-ui.js && node scripts/test-files-ui.js",
     "build": "node scripts/build-askpass.js && electron-builder --win nsis --x64",
     "pack": "node scripts/build-askpass.js && electron-builder --win --dir --x64"
   },
